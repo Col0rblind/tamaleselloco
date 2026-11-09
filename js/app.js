@@ -180,7 +180,17 @@ function cats(){
 /* ---------- Usuarios (requiere la Edge Function admin-users) ---------- */
 async function llamar(body){
   const {data,error}=await sb.functions.invoke('admin-users',{body});
-  if(error){ let m='No se pudo completar.'; try{ m=(await error.context.json()).error||m }catch{} const e=new Error(m); e.msg=m; throw e; }
+  if(error){
+    let m='No se pudo completar.';
+    if(error.name==='FunctionsFetchError') m='No hay conexión con la función admin-users (¿está desplegada? ¿ALLOWED_ORIGIN es correcto?).';
+    else if(error.context){
+      const s=error.context.status;
+      try{ const j=await error.context.json(); m=j.error||j.message||j.msg||('Error '+s); }catch{ m='Error '+(s||'desconocido')+' de la función.'; }
+      if(s===404) m='La función admin-users no existe en Supabase (no está desplegada o tiene otro nombre).';
+      if(s===401) m='La función rechazó tu sesión (401). Cierra sesión y vuelve a entrar.';
+    }
+    const e=new Error(m); e.msg=m; throw e;
+  }
   return data;
 }
 function mostrarClave(pw){
