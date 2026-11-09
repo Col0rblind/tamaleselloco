@@ -1,0 +1,16 @@
+:root{--acc:#b4421a;--bg:#fbf3e4;--card:#fff}
+[data-theme=oscuro]{--acc:#f0a04b;--bg:#17130f;--card:#241e18}
+[data-theme=muertos]{--acc:#ff8c1a;--bg:#2a0f3d;--card:#3b1a54}
+[data-theme=patrio]{--acc:#006847;--bg:#f4f9f1;--card:#fff}
+[data-theme=navidad]{--acc:#c1272d;--bg:#10331f;--card:#1a4a2e}
+body{background:var(--bg);font-family:system-ui,"Segoe UI",sans-serif}
+.card{background:var(--card);border-radius:14px}
+.btn-acc{background:var(--acc);color:#fff;border:0}.btn-acc:hover{filter:brightness(1.1);color:#fff}
+.acc{color:var(--acc)}
+.chip{border:2px solid var(--acc);color:inherit;background:transparent;border-radius:999px;padding:.5rem 1.1rem;font-weight:600}
+.chip.on{background:var(--acc);color:#fff}
+.big{font-size:3.2rem;font-weight:800;line-height:1;color:var(--acc)}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:2000;animation:fi .2s}
+.box{background:var(--card);padding:1.6rem;border-radius:16px;max-width:360px;width:90%;text-align:center;animation:pop .3s cubic-bezier(.2,1.5,.4,1)}
+@keyframes fi{from{opacity:0}}@keyframes pop{from{transform:scale(.6);opacity:0}}
+@media(prefers-reduced-motion:reduce){.ov,.box{animation:none}}
