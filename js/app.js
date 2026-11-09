@@ -2,7 +2,7 @@
 
 const sb = supabase.createClient(APP_CONFIG.SUPABASE_URL, APP_CONFIG.SUPABASE_ANON_KEY);
 const app = document.getElementById('app');
-const st = { me:null, cats:[], batches:[], salsa:null, view:'cocina', users:[], draft:{} };
+const st = { me:null, cats:[], batches:[], salsa:null, view:'cocina', users:[], resets:[], draft:{}, cart:null, range:'hoy' };
 
 // Construcción de DOM sin innerHTML: el texto de usuarios nunca se interpreta como HTML (anti-XSS)
 function h(tag, cls, txt, kids){ const e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; (kids||[]).forEach(k=>e.append(k)); return e; }
@@ -38,24 +38,33 @@ async function boot(){
   await loadAll(); subscribe(); render();
 }
 function loginView(msg){
-  app.replaceChildren();
-  const email=h('input','form-control mb-2'); email.type='email'; email.placeholder='Correo'; email.autocomplete='username'; email.maxLength=120;
-  const pw=h('input','form-control mb-3'); pw.type='password'; pw.placeholder='Contraseña'; pw.autocomplete='current-password'; pw.maxLength=72;
+  app.replaceChildren(); document.body.classList.add('login-bg');
+  const user=h('input','form-control'); user.placeholder='Usuario'; user.autocomplete='username'; user.maxLength=20; user.autocapitalize='none'; user.spellcheck=false;
+  const ug=h('div','input-group mb-3',null,[h('span','input-group-text',null,[h('i','bi bi-person')]),user]);
+  const P=pwField('Contraseña','current-password'), pw=P.input; P.el.prepend(h('span','input-group-text',null,[h('i','bi bi-lock')]));
   const err=h('div','text-danger small mb-2',msg||'');
-  const btn=h('button','btn btn-acc w-100',null,[ic('box-arrow-in-right'),'Entrar']);
+  const btn=h('button','btn btn-acc btn-lg w-100',null,[ic('box-arrow-in-right'),'Entrar']);
+  const forgot=h('button','btn btn-link w-100 mt-2 text-decoration-none','¿Olvidaste tu contraseña?'); forgot.type='button';
   let tries=0;
   btn.onclick=()=>seguro(async()=>{
-    if(!/^\S+@\S+\.\S+$/.test(email.value)||pw.value.length<8){err.textContent='Escribe un correo válido y tu contraseña.';return;}
+    const u=user.value.trim().toLowerCase();
+    if(!/^[a-z0-9._]{3,20}$/.test(u)||pw.value.length<8){err.textContent='Escribe tu usuario y tu contraseña.';return;}
     if(++tries>5){err.textContent='Demasiados intentos. Espera un minuto.';setTimeout(()=>tries=0,60000);return;}
     btn.disabled=true;
-    const {error}=await sb.auth.signInWithPassword({email:email.value.trim(),password:pw.value});
+    const {error}=await sb.auth.signInWithPassword({email:u+'@'+APP_CONFIG.EMAIL_DOMAIN,password:pw.value});
     btn.disabled=false;
-    if(error){err.textContent='Correo o contraseña incorrectos.';return;}
+    if(error){err.textContent='Usuario o contraseña incorrectos.';return;}
     boot();
   });
+  forgot.onclick=()=>seguro(async()=>{
+    const r=await formModal('¿Olvidaste tu contraseña?',[{key:'u',label:'Tu nombre de usuario',max:20}],'Avisar al administrador');
+    if(!r) return; const u=r.u.trim().toLowerCase();
+    if(!/^[a-z0-9._]{3,20}$/.test(u)) return toast('Escribe un usuario válido.',false);
+    await rpc('request_reset',{p_username:u});
+    toast('Listo. Si el usuario existe, el administrador ya recibió tu solicitud.');
+  });
   pw.onkeydown=e=>{if(e.key==='Enter')btn.click()};
-  const logo=h('i','bi bi-fire acc'); logo.style.fontSize='3rem';
-  app.append(h('div','card p-4 mx-auto mt-5 shadow',null,[h('div','text-center mb-3',null,[logo,h('h3','mt-2','Tamales')]),email,pw,err,btn]));
+  app.append(h('div','card login-card',null,[h('div','logo',null,[h('i','bi bi-fire')]),h('h3','text-center mb-0','Tamales'),h('p','text-center text-secondary mb-4','Gestión del negocio'),ug,P.el,err,btn,forgot]));
 }
 
 /* ---------- Datos y tiempo real ---------- */
@@ -67,30 +76,33 @@ async function loadAll(){
   ]);
   if(c.error||b.error) throw (c.error||b.error);
   st.cats=c.data; st.batches=b.data;
-  if(isAdmin()){ const u=await sb.from('profiles').select('id,full_name,email,role,active').order('full_name'); if(u.error) throw u.error; st.users=u.data; }
+  if(isAdmin()){ const [u,rs]=await Promise.all([sb.from('profiles').select('id,full_name,username,role,active').order('full_name'),sb.from('reset_requests').select('id,user_id,created_at').eq('handled',false)]); if(u.error||rs.error) throw (u.error||rs.error); st.users=u.data; st.resets=rs.data; }
 }
 let ch;
 function subscribe(){
   if(ch) sb.removeChannel(ch);
-  ch=sb.channel('live').on('postgres_changes',{event:'*',schema:'public'},()=>seguro(async()=>{await loadAll(); if(st.view!=='cocina') render();})).subscribe();
+  ch=sb.channel('live').on('postgres_changes',{event:'*',schema:'public'},()=>seguro(async()=>{await loadAll(); if(st.view!=='cocina'&&!document.querySelector('.ov')) render();})).subscribe();
 }
 const byKind = k => st.cats.filter(c=>c.kind===k);
 const salsaName = id => (st.cats.find(c=>c.id===id)||{}).name||'?';
 
 /* ---------- Vistas ---------- */
 function render(){
-  app.replaceChildren();
-  const tabs=[['cocina','fire','Cocina'],['dashboard','speedometer2','Hoy']]; if(isAdmin()) tabs.push(['cats','tags','Categorías'],['users','people','Usuarios']);
-  const nav=h('div','d-flex flex-wrap gap-2 mb-3 align-items-center',null,tabs.map(([v,i,l])=>{
-    const b=h('button','chip'+(st.view===v?' on':''),null,[ic(i),l]); b.onclick=()=>{st.view=v;render()}; return b;}));
+  app.replaceChildren(); document.body.classList.remove('login-bg');
+  const tabs=[['cocina','fire','Cocina'],['caja','cash-coin','Caja'],['envios','truck','Envíos'],['dashboard','speedometer2','Hoy'],['clientes','person-lines-fill','Clientes'],['ventas','receipt','Ventas'],['catalogo','journal-richtext','Catálogo']];
+  if(isAdmin()) tabs.push(['cats','tags','Categorías'],['users','people','Usuarios'],['storage','hdd','Almacenamiento']);
+  const nav=h('div','nav-scroll d-flex gap-2 mb-3 align-items-center',null,tabs.map(([v,i,l])=>{
+    const b=h('button','chip'+(st.view===v?' on':''),null,[ic(i),l,...(v==='users'&&st.resets.length?[h('span','badge bg-danger ms-2',String(st.resets.length))]:[])]); b.onclick=()=>{st.view=v;render()}; return b;}));
   const th=h('select','form-select form-select-sm ms-auto w-auto');
   [['claro','Claro'],['oscuro','Oscuro'],['muertos','Día de Muertos'],['patrio','Fiestas Patrias'],['navidad','Navidad']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;th.append(o)});
   th.value=document.documentElement.dataset.theme; th.onchange=()=>setTheme(th.value);
   const out=h('button','btn btn-sm btn-outline-secondary',null,[ic('box-arrow-right'),'Salir']);
   out.onclick=async()=>{if(await confirmar('¿Cerrar sesión?')){await sb.auth.signOut();st.me=null;loginView();}};
-  nav.append(th,out);
-  app.append(h('div','mb-2 text-secondary',null,[ic('person-circle'),st.me.full_name+' · '+st.me.role]),nav,
-    st.view==='cocina'?cocina():st.view==='dashboard'?dashboard():st.view==='users'?usuarios():cats());
+  
+  const top=h('div','d-flex gap-2 align-items-center mb-3 no-print',null,[h('div','flex-grow-1 text-secondary',null,[ic('person-circle'),st.me.full_name+' · '+st.me.role]),th,out]);
+  nav.classList.add('no-print');
+  const V={cocina,caja,envios,dashboard,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento};
+  app.append(top,nav,(V[st.view]||cocina)());
 }
 function setTheme(t){ const r=document.documentElement; r.dataset.theme=t; r.dataset.bsTheme=['oscuro','muertos','navidad'].includes(t)?'dark':'light'; localStorage.setItem('tema',t); }
 
@@ -178,25 +190,36 @@ function mostrarClave(pw){
   document.body.append(ov); i.select();
 }
 function usuarios(){
-  const wrap=h('div'), box=h('div','card p-3 mb-3'); box.append(h('h6',null,'Nuevo usuario'));
+  const wrap=h('div');
+  const reset=u=>seguro(async()=>{
+    if(!await confirmar(`¿Restablecer la contraseña de ${u.full_name}?`))return;
+    const r=await llamar({action:'reset_password',user_id:u.id}); await loadAll(); render(); mostrarClave(r.password);
+  });
+  if(st.resets.length){
+    const rb=h('div','card p-3 mb-3 border-warning'); rb.append(h('h6',null,null,[ic('bell-fill'),'Solicitudes de contraseña']));
+    st.resets.forEach(q=>{ const u=st.users.find(x=>x.id===q.user_id); if(!u) return;
+      const b=h('button','btn btn-sm btn-acc',null,[ic('key'),'Restablecer']); b.onclick=()=>reset(u);
+      rb.append(h('div','d-flex align-items-center gap-2 mb-2',null,[h('span','flex-grow-1',`${u.full_name} (@${u.username}) · ${fdt(q.created_at)}`),b])); });
+    wrap.append(rb);
+  }
+  const box=h('div','card p-3 mb-3'); box.append(h('h6',null,'Nuevo usuario'));
   const nm=h('input','form-control mb-2'); nm.placeholder='Nombre completo'; nm.maxLength=80;
-  const em=h('input','form-control mb-2'); em.type='email'; em.placeholder='Correo'; em.maxLength=120;
-  const rl=h('select','form-select mb-2');
-  [['usuario','Usuario'],['administrador','Administrador'],['master','Master']].filter(r=>r[0]!=='master'||st.me.role==='master').forEach(([v,l])=>{const o=h('option',null,l);o.value=v;rl.append(o)});
+  const un=h('input','form-control mb-2'); un.placeholder='Nombre de usuario (letras, números, punto)'; un.maxLength=20; un.autocapitalize='none';
+  const rl=h('select','form-select mb-2'); [['usuario','Usuario'],['administrador','Administrador']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;rl.append(o)});
   const add=h('button','btn btn-acc',null,[ic('person-plus'),'Crear usuario']);
   add.onclick=()=>seguro(async()=>{
-    if(nm.value.trim().length<2||!/^\S+@\S+\.\S+$/.test(em.value.trim())) return toast('Escribe un nombre y un correo válidos.',false);
-    if(!await confirmar(`¿Crear a ${nm.value.trim()} como ${rl.value}?`)) return;
-    const r=await llamar({action:'create',full_name:nm.value.trim(),email:em.value.trim(),role:rl.value});
+    const u=un.value.trim().toLowerCase();
+    if(nm.value.trim().length<2||!/^[a-z0-9._]{3,20}$/.test(u)) return toast('Escribe un nombre y un usuario válido (3 a 20: letras, números, punto o guion bajo).',false);
+    if(!await confirmar(`¿Crear a ${nm.value.trim()} (@${u}) como ${rl.value}?`)) return;
+    const r=await llamar({action:'create',full_name:nm.value.trim(),username:u,role:rl.value});
     await loadAll(); render(); mostrarClave(r.password);
   });
-  box.append(nm,em,rl,add); wrap.append(box);
+  box.append(nm,un,rl,add); wrap.append(box);
   st.users.forEach(u=>{
     const locked=u.id===st.me.id||(u.role==='master'&&st.me.role!=='master');
-    const row=h('div','card p-2 mb-2 d-flex flex-row align-items-center gap-2',null,[h('span','flex-grow-1',`${u.full_name} · ${u.role}${u.active?'':' · deshabilitado'}`)]);
+    const row=h('div','card p-2 mb-2 d-flex flex-row align-items-center gap-2',null,[h('span','flex-grow-1',`${u.full_name} (@${u.username||'—'}) · ${u.role}${u.active?'':' · deshabilitado'}`)]);
     if(!locked){
-      const rs=h('button','btn btn-sm btn-outline-secondary',null,[ic('key')]); rs.title='Restablecer contraseña';
-      rs.onclick=()=>seguro(async()=>{ if(!await confirmar(`¿Restablecer la contraseña de ${u.full_name}?`))return; const r=await llamar({action:'reset_password',user_id:u.id}); mostrarClave(r.password); });
+      const rs=h('button','btn btn-sm btn-outline-secondary',null,[ic('key')]); rs.title='Restablecer contraseña'; rs.onclick=()=>reset(u);
       const tg=h('button','btn btn-sm btn-outline-'+(u.active?'danger':'success'),null,[ic(u.active?'person-x':'person-check')]); tg.title=u.active?'Deshabilitar':'Habilitar';
       tg.onclick=()=>seguro(async()=>{ if(!await confirmar(u.active?`¿Deshabilitar a ${u.full_name}?`:`¿Habilitar a ${u.full_name}?`))return; await llamar({action:'set_active',user_id:u.id,active:!u.active}); await loadAll(); render(); toast('Listo'); });
       row.append(rs,tg);
@@ -207,8 +230,7 @@ function usuarios(){
 }
 function cambiarClaveView(){
   app.replaceChildren();
-  const a=h('input','form-control mb-2'); a.type='password'; a.placeholder='Nueva contraseña (mínimo 10)'; a.autocomplete='new-password'; a.maxLength=72;
-  const b=h('input','form-control mb-3'); b.type='password'; b.placeholder='Repítela'; b.autocomplete='new-password'; b.maxLength=72;
+  const A=pwField('Nueva contraseña (mínimo 10)','new-password'), B=pwField('Repítela','new-password'); const a=A.input, b=B.input;
   const go=h('button','btn btn-acc w-100','Guardar contraseña');
   go.onclick=()=>seguro(async()=>{
     if(a.value.length<10||!/[a-z]/.test(a.value)||!/[A-Z]/.test(a.value)||!/\d/.test(a.value)) return toast('Mínimo 10 caracteres, con mayúscula, minúscula y número.',false);
@@ -217,7 +239,7 @@ function cambiarClaveView(){
     const r=await sb.rpc('clear_must_change'); if(r.error) throw r.error;
     toast('Contraseña actualizada'); boot();
   });
-  app.append(h('div','card p-4 mx-auto mt-5',null,[h('h5',null,'Crea tu contraseña nueva'),h('p','small','Es obligatoria antes de continuar.'),a,b,go]));
+  app.append(h('div','card p-4 mx-auto mt-5',null,[h('h5',null,'Crea tu contraseña nueva'),h('p','small','Es obligatoria antes de continuar.'),A.el,B.el,go]));
 }
 
 sb.auth.onAuthStateChange(e=>{ if(e==='SIGNED_OUT'){ st.me=null; loginView(); } });
