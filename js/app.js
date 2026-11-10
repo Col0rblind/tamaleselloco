@@ -76,6 +76,7 @@ async function loadAll(){
   ]);
   if(c.error||b.error) throw (c.error||b.error);
   st.cats=c.data; st.batches=b.data;
+  const sf=await sb.rpc('staff_list'); if(!sf.error&&sf.data) st.staff=new Map(sf.data.map(x=>[x.id,x]));
   if(isAdmin()){ const [u,rs]=await Promise.all([sb.from('profiles').select('id,full_name,username,role,active,cargo,phone').order('full_name'),sb.from('reset_requests').select('id,user_id,created_at').eq('handled',false)]); if(u.error||rs.error) throw (u.error||rs.error); st.users=u.data; st.resets=rs.data; }
 }
 let ch;

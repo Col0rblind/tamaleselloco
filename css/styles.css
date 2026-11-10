@@ -93,3 +93,7 @@ body.login-bg{background:radial-gradient(circle at 20% 8%,color-mix(in srgb,var(
   .card{background:#fff!important;break-inside:avoid}
   .no-print{display:none!important}
 }
+
+.qty{width:84px;flex:none}
+.bar-bg{height:6px;background:var(--soft);border-radius:4px}
+.bar{height:100%;background:var(--acc);border-radius:4px}
