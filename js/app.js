@@ -76,7 +76,7 @@ async function loadAll(){
   ]);
   if(c.error||b.error) throw (c.error||b.error);
   st.cats=c.data; st.batches=b.data;
-  if(isAdmin()){ const [u,rs]=await Promise.all([sb.from('profiles').select('id,full_name,username,role,active').order('full_name'),sb.from('reset_requests').select('id,user_id,created_at').eq('handled',false)]); if(u.error||rs.error) throw (u.error||rs.error); st.users=u.data; st.resets=rs.data; }
+  if(isAdmin()){ const [u,rs]=await Promise.all([sb.from('profiles').select('id,full_name,username,role,active,cargo,phone').order('full_name'),sb.from('reset_requests').select('id,user_id,created_at').eq('handled',false)]); if(u.error||rs.error) throw (u.error||rs.error); st.users=u.data; st.resets=rs.data; }
 }
 let ch;
 function subscribe(){
@@ -89,8 +89,10 @@ const salsaName = id => (st.cats.find(c=>c.id===id)||{}).name||'?';
 /* ---------- Vistas ---------- */
 function render(){
   app.replaceChildren(); document.body.classList.remove('login-bg');
-  const tabs=[['cocina','fire','Cocina'],['caja','cash-coin','Caja'],['envios','truck','Envíos'],['dashboard','speedometer2','Hoy'],['clientes','person-lines-fill','Clientes'],['ventas','receipt','Ventas'],['catalogo','journal-richtext','Catálogo']];
-  if(isAdmin()) tabs.push(['cats','tags','Categorías'],['users','people','Usuarios'],['storage','hdd','Almacenamiento']);
+  const ALL={cocina:['fire','Cocina'],tamales:['basket3','Tamales'],caja:['cash-coin','Caja'],envios:['truck','Envíos'],apartados:['bookmark-star','Apartados'],clientes:['person-lines-fill','Clientes'],ventas:['receipt','Ventas'],catalogo:['journal-richtext','Catálogo'],cats:['tags','Categorías'],users:['people','Usuarios'],storage:['hdd','Almacenamiento']};
+  const allow=isAdmin()?Object.keys(ALL):(({cajero:['caja','envios','apartados','clientes','catalogo'],cocinero:['cocina','tamales','envios'],repartidor:['envios'],general:['cocina','tamales','caja','envios','apartados','clientes','ventas','catalogo']})[st.me.cargo]||['catalogo']);
+  if(!allow.includes(st.view)) st.view=allow[0];
+  const tabs=allow.map(k=>[k,ALL[k][0],ALL[k][1]]);
   const nav=h('div','nav-scroll d-flex gap-2 mb-3 align-items-center',null,tabs.map(([v,i,l])=>{
     const b=h('button','chip'+(st.view===v?' on':''),null,[ic(i),l,...(v==='users'&&st.resets.length?[h('span','badge bg-danger ms-2',String(st.resets.length))]:[])]); b.onclick=()=>{st.view=v;render()}; return b;}));
   const th=h('select','form-select form-select-sm ms-auto w-auto');
@@ -101,7 +103,7 @@ function render(){
   
   const top=h('div','d-flex gap-2 align-items-center mb-3 no-print',null,[h('div','flex-grow-1 text-secondary',null,[ic('person-circle'),st.me.full_name+' · '+st.me.role]),th,out]);
   nav.classList.add('no-print');
-  const V={cocina,caja,envios,dashboard,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento};
+  const V={cocina,tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento};
   app.append(top,nav,(V[st.view]||cocina)());
 }
 function setTheme(t){ const r=document.documentElement; r.dataset.theme=t; r.dataset.bsTheme=['oscuro','muertos','navidad'].includes(t)?'dark':'light'; localStorage.setItem('tema',t); }
@@ -152,7 +154,7 @@ function dashboard(){
 
 function cats(){
   const wrap=h('div');
-  [['salsa','Salsas'],['cantidad','Botones de cantidad'],['rol_trabajador','Roles de trabajador'],['sucursal','Sucursales']].forEach(([kind,title])=>{
+  [['salsa','Salsas'],['cantidad','Botones de cantidad'],['sucursal','Sucursales']].forEach(([kind,title])=>{
     const box=h('div','card p-3 mb-3'); box.append(h('h6',null,title));
     byKind(kind).forEach(c=>{
       const d=h('button','btn btn-sm btn-outline-danger ms-2',null,[h('i','bi bi-x-lg')]); d.title='Eliminar';
@@ -203,36 +205,51 @@ function usuarios(){
   const wrap=h('div');
   const reset=u=>seguro(async()=>{
     if(!await confirmar(`¿Restablecer la contraseña de ${u.full_name}?`))return;
-    const r=await llamar({action:'reset_password',user_id:u.id}); await loadAll(); render(); mostrarClave(r.password);
+    const r=await llamar({action:'reset_password',user_id:u.id});
+    await rpc('resolve_reset',{p_user:u.id}); await loadAll(); render(); mostrarClave(r.password);
   });
+  const dismiss=u=>seguro(async()=>{ if(!await confirmar(`¿Descartar la solicitud de ${u.full_name}?`))return; await rpc('resolve_reset',{p_user:u.id}); await loadAll(); render(); toast('Solicitud descartada'); });
   if(st.resets.length){
     const rb=h('div','card p-3 mb-3 border-warning'); rb.append(h('h6',null,null,[ic('bell-fill'),'Solicitudes de contraseña']));
     st.resets.forEach(q=>{ const u=st.users.find(x=>x.id===q.user_id); if(!u) return;
-      const b=h('button','btn btn-sm btn-acc',null,[ic('key'),'Restablecer']); b.onclick=()=>reset(u);
-      rb.append(h('div','d-flex align-items-center gap-2 mb-2',null,[h('span','flex-grow-1',`${u.full_name} (@${u.username}) · ${fdt(q.created_at)}`),b])); });
+      const a=h('button','btn btn-sm btn-acc',null,[ic('key'),'Restablecer']); a.onclick=()=>reset(u);
+      const d=h('button','btn btn-sm btn-outline-secondary',null,[ic('x-lg'),'Descartar']); d.onclick=()=>dismiss(u);
+      rb.append(h('div','d-flex flex-wrap align-items-center gap-2 mb-2',null,[h('span','flex-grow-1',`${u.full_name} (@${u.username}) · ${fdt(q.created_at)}`),a,d])); });
     wrap.append(rb);
   }
   const box=h('div','card p-3 mb-3'); box.append(h('h6',null,'Nuevo usuario'));
   const nm=h('input','form-control mb-2'); nm.placeholder='Nombre completo'; nm.maxLength=80;
-  const un=h('input','form-control mb-2'); un.placeholder='Nombre de usuario (letras, números, punto)'; un.maxLength=20; un.autocapitalize='none';
-  const rl=h('select','form-select mb-2'); [['usuario','Usuario'],['administrador','Administrador']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;rl.append(o)});
+  const un=h('input','form-control mb-2'); un.placeholder='Usuario (letras, números, punto)'; un.maxLength=20; un.autocapitalize='none';
+  const ph=h('input','form-control mb-2'); ph.placeholder='Celular (10 dígitos)'; ph.type='tel'; ph.inputMode='numeric'; ph.maxLength=10;
+  const rl=h('select','form-select mb-2'); [['usuario','Empleado'],['administrador','Administrador']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;rl.append(o)});
+  const cg=h('select','form-select mb-2'); CARGOS.forEach(([v,l])=>{const o=h('option',null,l);o.value=v;cg.append(o)});
+  rl.onchange=()=>{cg.disabled=rl.value==='administrador';};
   const add=h('button','btn btn-acc',null,[ic('person-plus'),'Crear usuario']);
   add.onclick=()=>seguro(async()=>{
-    const u=un.value.trim().toLowerCase();
+    const u=un.value.trim().toLowerCase(), tel=ph.value.replace(/\D/g,'');
     if(nm.value.trim().length<2||!/^[a-z0-9._]{3,20}$/.test(u)) return toast('Escribe un nombre y un usuario válido (3 a 20: letras, números, punto o guion bajo).',false);
-    if(!await confirmar(`¿Crear a ${nm.value.trim()} (@${u}) como ${rl.value}?`)) return;
-    const r=await llamar({action:'create',full_name:nm.value.trim(),username:u,role:rl.value});
+    if(!/^[0-9]{10}$/.test(tel)) return toast('El celular debe tener 10 dígitos.',false);
+    if(!await confirmar(`¿Crear a ${nm.value.trim()} (@${u}) como ${rl.value==='administrador'?'administrador':'empleado ('+cg.value+')'}?`)) return;
+    const r=await llamar({action:'create',full_name:nm.value.trim(),username:u,role:rl.value,cargo:cg.value,phone:tel});
     await loadAll(); render(); mostrarClave(r.password);
   });
-  box.append(nm,un,rl,add); wrap.append(box);
+  box.append(nm,un,ph,rl,cg,add); wrap.append(box);
   st.users.forEach(u=>{
     const locked=u.id===st.me.id||(u.role==='master'&&st.me.role!=='master');
-    const row=h('div','card p-2 mb-2 d-flex flex-row align-items-center gap-2',null,[h('span','flex-grow-1',`${u.full_name} (@${u.username||'—'}) · ${u.role}${u.active?'':' · deshabilitado'}`)]);
+    const cl=(CARGOS.find(c=>c[0]===u.cargo)||[])[1]||'';
+    const row=h('div','card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap',null,[h('span','flex-grow-1',`${u.full_name} (@${u.username||'—'}) · ${u.role==='usuario'?cl:u.role} · ${u.phone||'sin celular'}${u.active?'':' · deshabilitado'}`)]);
     if(!locked){
+      const ed=h('button','btn btn-sm btn-outline-secondary',null,[ic('pencil')]); ed.title='Cargo y celular';
+      ed.onclick=()=>seguro(async()=>{
+        const f=await formModal('Datos del empleado',[{key:'c',label:'Cargo',options:CARGOS,value:u.cargo},{key:'p',label:'Celular (10 dígitos)',type:'tel',mode:'numeric',max:10,value:u.phone}],'Guardar'); if(!f) return;
+        const tel=f.p.replace(/\D/g,''); if(!/^[0-9]{10}$/.test(tel)) return toast('El celular debe tener 10 dígitos.',false);
+        if(!await confirmar(`¿Guardar los cambios de ${u.full_name}?`)) return;
+        await llamar({action:'update_profile',user_id:u.id,cargo:f.c,phone:tel}); await loadAll(); render(); toast('Actualizado');
+      });
       const rs=h('button','btn btn-sm btn-outline-secondary',null,[ic('key')]); rs.title='Restablecer contraseña'; rs.onclick=()=>reset(u);
       const tg=h('button','btn btn-sm btn-outline-'+(u.active?'danger':'success'),null,[ic(u.active?'person-x':'person-check')]); tg.title=u.active?'Deshabilitar':'Habilitar';
       tg.onclick=()=>seguro(async()=>{ if(!await confirmar(u.active?`¿Deshabilitar a ${u.full_name}?`:`¿Habilitar a ${u.full_name}?`))return; await llamar({action:'set_active',user_id:u.id,active:!u.active}); await loadAll(); render(); toast('Listo'); });
-      row.append(rs,tg);
+      row.append(ed,rs,tg);
     }
     wrap.append(row);
   });

@@ -22,14 +22,25 @@ body.login-bg{background:radial-gradient(circle at 15% 10%,var(--acc),transparen
 .pcard{overflow:hidden;height:100%}
 .pcard-head{background:linear-gradient(135deg,var(--acc),#f0a04b);color:#fff;padding:1rem;font-size:1.2rem;font-weight:700;display:flex;gap:.6rem;align-items:center}
 .price{font-size:1.8rem;font-weight:800;color:var(--acc)}
+
+.card>.input-group,.card>.form-control,.card>.form-select{max-width:420px}
+.box{max-height:90vh;overflow:auto}
+.thumb{width:44px;height:44px;object-fit:cover;border-radius:8px;flex:none}
+.pimg{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}
+.ticket{font-family:ui-monospace,Menlo,Consolas,monospace;max-width:320px;margin:0 auto}
+.ticket hr{margin:.5rem 0}
+@media(max-width:576px){.big{font-size:2.4rem}.container{padding-left:.6rem;padding-right:.6rem}}
 @media print{
-  body *{visibility:hidden}
-  #print-area,#print-area *{visibility:visible}
-  #print-area{position:absolute;left:0;top:0;width:100%}
-  .no-print{display:none!important}
-  body,html{background:#fff!important}
+  body[data-print=ticket]>*:not(.ticket-ov){display:none!important}
+  body[data-print=ticket] .ticket-ov{position:static!important;background:none!important;display:block!important;animation:none}
+  body[data-print=ticket] .ticket-ov .box{box-shadow:none;background:#fff;max-height:none;overflow:visible;animation:none}
+  body[data-print=ticket] .ticket,body[data-print=ticket] .ticket *{color:#000!important}
+  body[data-print=catalog]>*:not(#app){display:none!important}
+  body[data-print=catalog] #app>*:not(#print-area){display:none!important}
+  body[data-print],body[data-print] #app{background:#fff!important}
   #print-area,#print-area *{color:#222!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   #print-area .pcard-head,#print-area .pcard-head *{color:#fff!important}
   #print-area .price{color:var(--acc)!important}
   .card{background:#fff!important;break-inside:avoid}
+  .no-print{display:none!important}
 }
