@@ -11,7 +11,7 @@ const isAdmin = () => st.me && ['master','administrador'].includes(st.me.role);
 
 function toast(msg, ok=true){
   const t=h('div','position-fixed top-0 start-50 translate-middle-x mt-3 px-3 py-2 rounded text-white '+(ok?'bg-success':'bg-danger'),null,[ic(ok?'check-circle':'exclamation-triangle'),msg]);
-  t.style.zIndex=3000; document.body.append(t); setTimeout(()=>t.remove(),3000);
+  t.style.zIndex=3000; document.body.append(t); setTimeout(()=>t.remove(),msg.length>70?7000:3000);
 }
 // Confirmación animada obligatoria antes de cualquier cambio
 function confirmar(msg){
@@ -92,19 +92,37 @@ function render(){
   const ALL={cocina:['fire','Cocina'],tamales:['basket3','Tamales'],caja:['cash-coin','Caja'],envios:['truck','Envíos'],apartados:['bookmark-star','Apartados'],clientes:['person-lines-fill','Clientes'],ventas:['receipt','Ventas'],catalogo:['journal-richtext','Catálogo'],cats:['tags','Categorías'],users:['people','Usuarios'],storage:['hdd','Almacenamiento']};
   const allow=isAdmin()?Object.keys(ALL):(({cajero:['caja','envios','apartados','clientes','catalogo'],cocinero:['cocina','tamales','envios'],repartidor:['envios'],general:['cocina','tamales','caja','envios','apartados','clientes','ventas','catalogo']})[st.me.cargo]||['catalogo']);
   if(!allow.includes(st.view)) st.view=allow[0];
-  const tabs=allow.map(k=>[k,ALL[k][0],ALL[k][1]]);
-  const nav=h('div','nav-scroll d-flex gap-2 mb-3 align-items-center',null,tabs.map(([v,i,l])=>{
-    const b=h('button','chip'+(st.view===v?' on':''),null,[ic(i),l,...(v==='users'&&st.resets.length?[h('span','badge bg-danger ms-2',String(st.resets.length))]:[])]); b.onclick=()=>{st.view=v;render()}; return b;}));
-  const th=h('select','form-select form-select-sm ms-auto w-auto');
-  [['claro','Claro'],['oscuro','Oscuro'],['muertos','Día de Muertos'],['patrio','Fiestas Patrias'],['navidad','Navidad']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;th.append(o)});
-  th.value=document.documentElement.dataset.theme; th.onchange=()=>setTheme(th.value);
-  const out=h('button','btn btn-sm btn-outline-secondary',null,[ic('box-arrow-right'),'Salir']);
-  out.onclick=async()=>{if(await confirmar('¿Cerrar sesión?')){await sb.auth.signOut();st.me=null;loginView();}};
-  
-  const top=h('div','d-flex gap-2 align-items-center mb-3 no-print',null,[h('div','flex-grow-1 text-secondary',null,[ic('person-circle'),st.me.full_name+' · '+st.me.role]),th,out]);
-  nav.classList.add('no-print');
+  const go=v=>{st.view=v;render();window.scrollTo(0,0);};
+  const logout=async()=>{ if(await confirmar('¿Cerrar sesión?')){ await sb.auth.signOut(); st.me=null; loginView(); } };
+  const badgeFor=v=>v==='users'&&st.resets.length?[h('span','badge bg-danger ms-1',String(st.resets.length))]:[];
+  const mkTheme=()=>{ const t=h('select','form-select form-select-sm theme-sel');
+    [['claro','Claro'],['oscuro','Oscuro'],['muertos','Día de Muertos'],['patrio','Fiestas Patrias'],['navidad','Navidad']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;t.append(o)});
+    t.value=document.documentElement.dataset.theme; t.onchange=()=>setTheme(t.value); return t; };
+  const mainKeys=['cocina','tamales','caja','envios','apartados','clientes','ventas','catalogo'].filter(k=>allow.includes(k)), admKeys=['cats','users','storage'].filter(k=>allow.includes(k));
+  const link=(k,cls)=>{const b=h('button',cls+(st.view===k?' on':''),null,[ic(ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.onclick=()=>go(k); return b;};
+  const links=mainKeys.map(k=>link(k,'navlink'));
+  if(admKeys.length){
+    const dd=h('div','dd'), menu=h('div','dd-menu'); admKeys.forEach(k=>menu.append(link(k,'navlink')));
+    const tg=h('button','navlink'+(admKeys.includes(st.view)?' on':''),null,[ic('gear'),h('span',null,'Administración'),...(st.resets.length?[h('span','badge bg-danger ms-1',String(st.resets.length))]:[]),h('i','bi bi-chevron-down')]);
+    tg.onclick=e=>{e.stopPropagation();menu.classList.toggle('open');}; dd.append(tg,menu); links.push(dd);
+    if(!window._ddBound){ window._ddBound=1; document.addEventListener('click',()=>document.querySelectorAll('.dd-menu.open').forEach(m=>m.classList.remove('open'))); }
+  }
+  const out=h('button','btn btn-sm btn-outline-secondary',null,[ic('box-arrow-right'),'Salir']); out.onclick=logout;
+  const top=h('header','topbar no-print',null,[h('div','topbar-in',null,[h('div','brand',null,[h('i','bi bi-fire'),h('span',null,APP_CONFIG.BUSINESS_NAME||'Tamales')]),
+    h('span','sect',ALL[st.view][1]),h('nav','topnav',null,links),h('div','topright',null,[mkTheme(),h('span','who d-none d-xl-inline',st.me.full_name),out])])]);
+  // Navegación inferior (móvil): 4 principales + "Más"
+  const prio=['caja','envios','apartados','tamales','cocina','ventas','clientes','catalogo','cats','users','storage'].filter(k=>allow.includes(k));
+  const prim=prio.length<=5?prio.slice(0,5):prio.slice(0,4), rest=prio.filter(k=>!prim.includes(k));
+  const masSheet=()=>{
+    const ov=h('div','ov sheet'), bx=h('div','box text-start'), close=()=>ov.remove(); ov.onclick=e=>{if(e.target===ov)close();};
+    if(rest.length) bx.append(h('div','sheet-grid',null,rest.map(k=>{const b=h('button','sheet-item',null,[h('i','bi bi-'+ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.onclick=()=>{close();go(k);}; return b;})));
+    const o2=h('button','btn btn-outline-secondary w-100 mt-3',null,[ic('box-arrow-right'),'Cerrar sesión · '+st.me.full_name]); o2.onclick=()=>{close();logout();};
+    bx.append(h('label','small text-secondary mt-3','Tema'),mkTheme(),o2); ov.append(bx); document.body.append(ov);
+  };
+  const items=prim.map(k=>{const b=h('button','bn'+(st.view===k?' on':''),null,[h('i','bi bi-'+ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.onclick=()=>go(k); return b;});
+  const mas=h('button','bn'+(rest.includes(st.view)?' on':''),null,[h('i','bi bi-grid'),h('span',null,'Más'),...(rest.includes('users')&&st.resets.length?[h('span','badge bg-danger',String(st.resets.length))]:[])]); mas.onclick=masSheet; items.push(mas);
   const V={cocina,tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento};
-  app.append(top,nav,(V[st.view]||cocina)());
+  app.append(top,h('main','container py-3',null,[(V[st.view]||cocina)()]),h('nav','bottom-nav no-print',null,items));
 }
 function setTheme(t){ const r=document.documentElement; r.dataset.theme=t; r.dataset.bsTheme=['oscuro','muertos','navidad'].includes(t)?'dark':'light'; localStorage.setItem('tema',t); }
 
@@ -219,7 +237,7 @@ function usuarios(){
   }
   const box=h('div','card p-3 mb-3'); box.append(h('h6',null,'Nuevo usuario'));
   const nm=h('input','form-control mb-2'); nm.placeholder='Nombre completo'; nm.maxLength=80;
-  const un=h('input','form-control mb-2'); un.placeholder='Usuario (letras, números, punto)'; un.maxLength=20; un.autocapitalize='none';
+  const un=h('input','form-control'); un.placeholder='usuario'; un.maxLength=20; un.autocapitalize='none'; un.spellcheck=false; const ug=h('div','input-group mb-2',null,[un,h('span','input-group-text','@'+APP_CONFIG.EMAIL_DOMAIN)]);
   const ph=h('input','form-control mb-2'); ph.placeholder='Celular (10 dígitos)'; ph.type='tel'; ph.inputMode='numeric'; ph.maxLength=10;
   const rl=h('select','form-select mb-2'); [['usuario','Empleado'],['administrador','Administrador']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;rl.append(o)});
   const cg=h('select','form-select mb-2'); CARGOS.forEach(([v,l])=>{const o=h('option',null,l);o.value=v;cg.append(o)});
@@ -229,11 +247,13 @@ function usuarios(){
     const u=un.value.trim().toLowerCase(), tel=ph.value.replace(/\D/g,'');
     if(nm.value.trim().length<2||!/^[a-z0-9._]{3,20}$/.test(u)) return toast('Escribe un nombre y un usuario válido (3 a 20: letras, números, punto o guion bajo).',false);
     if(!/^[0-9]{10}$/.test(tel)) return toast('El celular debe tener 10 dígitos.',false);
+    const ver=await llamar({action:'version'}).catch(()=>null);
+    if(!ver||ver.version<4) return toast('La función admin-users instalada está desactualizada. Vuelve a desplegar el index.ts nuevo: Edge Functions → admin-users → Code → Deploy updates.',false);
     if(!await confirmar(`¿Crear a ${nm.value.trim()} (@${u}) como ${rl.value==='administrador'?'administrador':'empleado ('+cg.value+')'}?`)) return;
     const r=await llamar({action:'create',full_name:nm.value.trim(),username:u,role:rl.value,cargo:cg.value,phone:tel});
     await loadAll(); render(); mostrarClave(r.password);
   });
-  box.append(nm,un,ph,rl,cg,add); wrap.append(box);
+  box.append(nm,ug,ph,rl,cg,add); wrap.append(box);
   st.users.forEach(u=>{
     const locked=u.id===st.me.id||(u.role==='master'&&st.me.role!=='master');
     const cl=(CARGOS.find(c=>c[0]===u.cargo)||[])[1]||'';

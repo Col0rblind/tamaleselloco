@@ -13,7 +13,7 @@ const safe = s => /^[=+\-@]/.test(String(s)) ? "'" + s : String(s);
 const badge = (t, c) => h('span', 'badge bg-' + c + ' me-1', t);
 const canCash = () => isAdmin() || ['cajero', 'general'].includes(st.me.cargo);
 const canKitchen = () => isAdmin() || ['cocinero', 'general'].includes(st.me.cargo);
-const newCart = () => ({ items: {}, kind: 'mostrador', customer: '', note: '', paid: '', method: 'efectivo', deliver: true, editing: null, back: 'caja' });
+const newCart = () => ({ items: {}, kind: 'mostrador', customer: '', note: '', paid: '', method: 'efectivo', estado: '', editing: null, back: 'caja' });
 const bad = m => { const e = new Error(m); e.msg = m; return e; };
 const ORD = 'id,total,status,kind,delivery,note,created_at,customer_id,stock_debited,customers(name,phone,colony,street,street_number,address),payments(id,amount,method,tendered,created_at),order_items(qty,unit_price,product_id)';
 
@@ -76,12 +76,12 @@ function etiqueta(o) {
   if (o.status === 'cancelado') return ['CANCELADO', 'secondary'];
   if (o.status === 'entregado') return saldo > 0.001 ? ['ENTREGADO X COBRAR', 'danger'] : ['PAGADO ENTREGADO', 'success'];
   if (saldo <= 0.001) return [o.kind === 'apartado' ? 'APARTADO PAGADO X ENTREGAR' : 'PAGADO X ENTREGAR', 'primary'];
-  if (o.kind === 'apartado') return ['APARTADO X ABONAR', 'warning'];
+  if (o.kind === 'apartado') return ['APARTADO X ABONAR X ENTREGAR', 'warning'];
   return pg > 0 ? ['ABONADO X COBRAR X ENTREGAR', 'warning'] : ['X COBRAR X ENTREGAR', 'danger'];
 }
 
 /* ---------- Cobros, WhatsApp, detalle y ticket ---------- */
-async function abonar(o, saldo, sinRender) {
+async function abonar(o, saldo, sinRender, cat) {
   const r = await formModal(`Cobrar · pedido #${o.id}`, [
     { key: 'a', label: `Recibido (saldo ${$$(saldo)})`, type: 'number', min: 0.01, step: '0.01', mode: 'decimal' },
     { key: 'm', label: 'Método de pago', options: METODOS }], 'Cobrar');
@@ -93,24 +93,12 @@ async function abonar(o, saldo, sinRender) {
   if (!await confirmar(`¿Cobrar ${$$(ap)}${ch > 0 ? ' y dar cambio de ' + $$(ch) : ''}?`)) return null;
   await rpc('add_payment', { p_order: o.id, p_tendered: v, p_method: r.m });
   if (ch > 0) msgModal('Cambio a entregar', $$(ch), `Recibido ${$$(v)} · Cobrado ${$$(ap)}`); else toast('Pago registrado');
-  if (!sinRender) render();
+  if (!sinRender) { render(); avisar(await cargarPedido(o.id), 'pago', cat); }
   return ap;
-}
-function avisar(o, tipo) {
-  const cu = o.customers, tel = cu && cu.phone ? String(cu.phone).replace(/\D/g, '') : '';
-  if (!tel) return toast('El cliente no tiene celular registrado.', false);
-  const M = { nuevo: `recibimos tu pedido #${o.id} por ${$$(o.total)}. ¡Gracias por tu compra!`, listo: `tu pedido #${o.id} ya está listo.`,
-    camino: `tu pedido #${o.id} ya va en camino.`, entregado: `tu pedido #${o.id} fue entregado. ¡Buen provecho!` };
-  const msg = `Hola ${cu.name}, ${M[tipo]} (${APP_CONFIG.BUSINESS_NAME || 'Tamales'})`;
-  const ov = h('div', 'ov'), a = h('a', 'btn btn-success w-100 mb-2', null, [ic('whatsapp'), 'Abrir WhatsApp y enviar']);
-  a.href = 'https://wa.me/' + (tel.length === 10 ? (APP_CONFIG.WA_COUNTRY || '52') + tel : tel) + '?text=' + encodeURIComponent(msg); a.target = '_blank'; a.rel = 'noopener';
-  a.onclick = () => setTimeout(() => ov.remove(), 300);
-  const no = h('button', 'btn btn-outline-secondary w-100', 'Ahora no'); no.onclick = () => ov.remove();
-  ov.append(h('div', 'box', null, [h('h5', null, 'Avisar al cliente'), h('p', 'small text-secondary', msg), a, no])); document.body.append(ov);
 }
 async function cargarPedido(id) { const r = await sb.from('orders').select(ORD).eq('id', id).single(); errDb(r.error); return r.data; }
 
-function verTicket(o, cat) {
+function verTicket(o, cat, tipo) {
   const ov = h('div', 'ov ticket-ov'), bx = h('div', 'box text-start'), t = h('div', 'ticket'), [lab] = etiqueta(o), pg = sum(o.payments), cu = o.customers;
   t.id = 'print-ticket';
   t.append(h('h5', 'text-center mb-0', APP_CONFIG.BUSINESS_NAME || 'Tamales'), h('div', 'text-center small mb-2', 'Comprobante de compra'),
@@ -129,12 +117,10 @@ function verTicket(o, cat) {
   t.append(h('div', 'small d-flex justify-content-between', null, [h('span', null, 'Pagado'), h('span', null, $$(pg))]),
     h('div', 'small d-flex justify-content-between', null, [h('span', null, 'Saldo'), h('span', null, $$(Math.max(0, Number(o.total) - pg)))]),
     h('div', 'text-center fw-bold mt-2', lab), h('div', 'text-center small mt-2', '¡Gracias por su compra!'));
-  const pr = h('button', 'btn btn-acc w-100 mb-2 no-print', null, [ic('file-earmark-pdf'), 'Imprimir / Guardar PDF']);
-  pr.onclick = () => { document.body.dataset.print = 'ticket'; window.addEventListener('afterprint', () => { delete document.body.dataset.print; }, { once: true }); window.print(); };
-  const x = h('button', 'btn btn-outline-secondary w-100 no-print', 'Cerrar'); x.onclick = () => ov.remove();
-  bx.append(t, h('div', 'mt-3 no-print', null, [pr]));
-  if (cu && cu.phone) { const w = h('button', 'btn btn-success w-100 mb-2 no-print', null, [ic('whatsapp'), 'Avisar por WhatsApp']); w.onclick = () => avisar(o, 'nuevo'); bx.append(w); }
-  bx.append(x); ov.append(bx); document.body.append(ov);
+  const dl = h('button', 'btn btn-acc w-100 mb-2', null, [ic('file-earmark-pdf'), 'Descargar PDF']); dl.onclick = () => descargar(pdfTicket(ticketLines(o, cat)), `ticket-${o.id}.pdf`);
+  const wa = h('button', 'btn btn-success w-100 mb-2', null, [ic('whatsapp'), 'Compartir por WhatsApp']); wa.onclick = () => avisar(o, tipo || (o.kind === 'apartado' ? 'apartado' : 'nuevo'), cat);
+  const x = h('button', 'btn btn-outline-secondary w-100', 'Cerrar'); x.onclick = () => ov.remove();
+  bx.append(t, h('div', 'mt-3', null, [dl, wa, x])); ov.append(bx); document.body.append(ov);
 }
 function verDetalle(o, cat) {
   const ov = h('div', 'ov'), bx = h('div', 'box text-start'), [lab, col] = etiqueta(o), pg = sum(o.payments), cu = o.customers;
@@ -163,21 +149,23 @@ function acciones(row, o, cat, saldo) {
   const mk = (txt, icon, fn, cls = 'btn-outline-secondary') => { const b = h('button', 'btn btn-sm ' + cls, null, [ic(icon), txt]); b.onclick = () => seguro(fn); row.append(b); };
   const set = async (status, delivery, msg, aviso) => {
     if (!await confirmar(msg)) return;
-    await rpc('set_order_status', { p_order: o.id, p_status: status, p_delivery: delivery }); toast('Actualizado'); render(); if (aviso) avisar(o, aviso);
+    await rpc('set_order_status', { p_order: o.id, p_status: status, p_delivery: delivery }); toast('Actualizado'); render(); if (aviso) avisar(await cargarPedido(o.id), aviso, cat);
   };
   mk('Detalle', 'list-ul', () => verDetalle(o, cat));
-  if (saldo > 0.001 && (cash || (repar && o.kind === 'envio'))) mk(o.kind === 'apartado' ? 'Abonar' : 'Cobrar', 'cash-coin', () => abonar(o, saldo), 'btn-acc');
+  if (saldo > 0.001 && (cash || (repar && o.kind === 'envio'))) mk(o.kind === 'apartado' ? 'Abonar' : 'Cobrar', 'cash-coin', () => abonar(o, saldo, false, cat), 'btn-acc');
   if (o.status === 'pendiente' && (adm || cash || (cg === 'cocinero' && o.kind === 'envio')))
-    mk('Marcar listo', 'check2', () => set('listo', null, `¿El pedido #${o.id} está listo? Se descontarán los tamales del inventario.`, o.kind === 'envio' ? 'listo' : null));
+    mk('Marcar listo', 'check2', () => set('listo', null, `¿El pedido #${o.id} está listo? Se descontarán los tamales del inventario.`, o.customer_id ? 'listo' : null));
   if (o.kind === 'envio' && o.delivery === 'por_enviar' && (adm || cash || (repar && o.status === 'listo')))
     mk('Salió a reparto', 'truck', () => set(o.status === 'pendiente' ? 'listo' : o.status, 'en_camino', `¿El pedido #${o.id} salió a reparto?`, 'camino'));
+  if (o.kind === 'apartado' && saldo <= 0.001 && o.customer_id && (adm || cash))
+    mk('Salió a reparto', 'truck', () => set(o.status === 'pendiente' ? 'listo' : o.status, 'en_camino', `¿El apartado #${o.id} salió a reparto?`, 'camino'));
   if (o.kind === 'envio' && o.delivery === 'en_camino' && (adm || cash || repar))
     mk(saldo > 0.001 ? 'Cobrar y entregar' : 'Entregado', 'box-seam', async () => {
       if (saldo > 0.001) { const ap = await abonar(o, saldo, true); if (ap === null) return; if (ap < saldo - 0.001) { toast('Aún queda saldo por cobrar.', false); render(); return; } }
       await set('entregado', null, `¿Confirmas que el pedido #${o.id} fue entregado?`, 'entregado');
     }, 'btn-acc');
   if (o.kind !== 'envio' && saldo <= 0.001 && ['pendiente', 'listo'].includes(o.status) && (adm || cash))
-    mk('Entregar', 'box-seam', () => set('entregado', null, `¿Entregar el pedido #${o.id} al cliente?`, null), 'btn-acc');
+    mk('Entregar', 'box-seam', () => set('entregado', null, `¿Entregar el pedido #${o.id} al cliente?`, o.customer_id ? 'entregado' : null), 'btn-acc');
   if (o.status === 'listo' && (adm || cash)) mk('Regresar a pendiente', 'arrow-counterclockwise', () => set('pendiente', null, '¿Regresar a pendiente? Los tamales vuelven al inventario.', null));
   if (o.status === 'pendiente' && cash) mk('Editar', 'pencil', () => editar(o));
   mk('Ticket', 'receipt', () => verTicket(o, cat));
@@ -192,16 +180,18 @@ function pedidoCard(o, cat) {
   c.append(h('div', 'small mt-1', `Pagado ${$$(pg)} · Saldo ${$$(saldo)}`));
   const row = h('div', 'd-flex flex-wrap gap-2 mt-2'); acciones(row, o, cat, saldo); c.append(row); return c;
 }
-function listaPedidos(titulo, vacio, filtrar) {
+function listaPedidos(titulo, vacio, filtrar, post) {
   return lazy(async box => {
     const [cat, r] = await Promise.all([getCat(), filtrar(sb.from('orders').select(ORD)).order('created_at').limit(200)]);
     if (r.error) throw r.error;
+    const data = post ? r.data.filter(post) : r.data;
     box.replaceChildren(h('h5', null, titulo));
-    if (!r.data.length) box.append(h('p', 'text-secondary', vacio));
-    r.data.forEach(o => box.append(pedidoCard(o, cat)));
+    if (!data.length) box.append(h('p', 'text-secondary', vacio));
+    data.forEach(o => box.append(pedidoCard(o, cat)));
   });
 }
-const envios = () => listaPedidos('Envíos pendientes', 'No hay envíos pendientes.', q => q.eq('kind', 'envio').neq('status', 'cancelado').neq('status', 'entregado'));
+const envios = () => listaPedidos('Envíos y apartados pagados por entregar', 'No hay envíos pendientes.',
+  q => q.in('kind', ['envio', 'apartado']).neq('status', 'cancelado').neq('status', 'entregado'), o => o.kind === 'envio' || Number(o.total) - sum(o.payments) <= 0.001);
 const apartados = () => listaPedidos('Apartados', 'No hay apartados pendientes.', q => q.eq('kind', 'apartado').neq('status', 'cancelado').neq('status', 'entregado'));
 
 /* ---------- Clientes ---------- */
@@ -274,7 +264,7 @@ function caja() {
           mkb('plus-lg', () => { C.items[p.id] = Math.min(1000, q + 1); draw(); }), mkb('x-lg', () => { delete C.items[p.id]; draw(); })]));
       });
       cart.append(h('div', 'd-flex gap-2 my-2 flex-wrap', null, [['mostrador', 'shop', 'Mostrador'], ['envio', 'truck', 'Envío'], ['apartado', 'bookmark-star', 'Apartado']].map(([k, i, l]) => {
-        const b = h('button', 'chip' + (C.kind === k ? ' on' : ''), null, [ic(i), l]); b.onclick = () => { C.kind = k; draw(); }; return b; })));
+        const b = h('button', 'chip' + (C.kind === k ? ' on' : ''), null, [ic(i), l]); b.onclick = () => { C.kind = k; C.estado = ''; draw(); }; return b; })));
       const cs = h('select', 'form-select'); cs.append(Object.assign(h('option', null, C.kind === 'mostrador' ? '— Sin cliente —' : '— Elige cliente (obligatorio) —'), { value: '' }));
       cu.data.forEach(c => cs.append(Object.assign(h('option', null, c.name), { value: String(c.id) }))); cs.value = C.customer; cs.onchange = () => { C.customer = cs.value; };
       const nc = h('button', 'btn btn-outline-secondary', null, [ic('person-plus')]); nc.title = 'Nuevo cliente';
@@ -282,20 +272,21 @@ function caja() {
       const note = h('input', 'form-control mb-2'); note.placeholder = 'Nota (opcional)'; note.maxLength = 200; note.value = C.note; note.oninput = () => { C.note = note.value; };
       cart.append(h('div', 'input-group mb-2', null, [cs, nc]), note);
 
-      const lab = h('div', 'fw-bold acc mt-2'), chg = h('div', 'fs-5 mt-1'), upd = () => {
-        const v = C.paid === '' ? 0 : Number(C.paid) || 0, ap = Math.min(Math.max(v, 0), total), full = ap >= total && total > 0;
+      const defs = ESTADOS[C.kind], hint = h('div', 'small fw-semibold mt-1'), chg = h('div', 'fs-5 mt-1');
+      const upd = () => {
+        const v = C.paid === '' ? 0 : Number(C.paid) || 0, ap = Math.min(Math.max(v, 0), total), d = defs.find(x => x[0] === C.estado), er = d ? validaEstado(d[1], ap, total) : '';
         chg.textContent = v > total ? `Cambio a entregar: ${$$(r2(v - total))}` : `Falta por pagar: ${$$(r2(total - ap))}`;
-        lab.textContent = 'Quedará como: ' + etiqueta({ kind: C.kind, status: C.kind === 'mostrador' && C.deliver && full ? 'entregado' : 'pendiente', total, payments: [{ amount: ap }] })[0];
+        hint.textContent = !d ? 'Elige el estado de la venta.' : er || 'Quedará como: ' + C.estado;
+        hint.className = 'small fw-semibold mt-1 ' + (!d ? 'text-secondary' : er ? 'text-danger' : 'text-success');
       };
       if (!C.editing) {
+        const es = h('select', 'form-select mb-2'); es.append(Object.assign(h('option', null, '— Estado de la venta —'), { value: '' }));
+        defs.forEach(d => es.append(Object.assign(h('option', null, d[0]), { value: d[0] }))); es.value = C.estado; es.onchange = () => { C.estado = es.value; upd(); };
         const paid = h('input', 'form-control'); paid.type = 'number'; paid.min = 0; paid.step = '0.01'; paid.inputMode = 'decimal'; paid.placeholder = 'Recibido (pago / abono)'; paid.value = C.paid; paid.oninput = () => { C.paid = paid.value; upd(); };
         const met = h('select', 'form-select w-auto'); METODOS.forEach(([v, l]) => met.append(Object.assign(h('option', null, l), { value: v }))); met.value = C.method; met.onchange = () => { C.method = met.value; };
-        cart.append(h('div', 'input-group mb-2', null, [paid, met]));
-        if (C.kind === 'mostrador') { const k = h('input', 'form-check-input'); k.type = 'checkbox'; k.checked = C.deliver; k.onchange = () => { C.deliver = k.checked; upd(); };
-          cart.append(h('div', 'form-check', null, [k, h('label', 'form-check-label ms-2', 'Entregar ahora (si queda pagado)')])); }
-        cart.append(chg);
+        cart.append(es, h('div', 'input-group mb-2', null, [paid, met]), chg);
       }
-      cart.append(lab); upd();
+      cart.append(hint); upd();
       const go = h('button', 'btn btn-acc btn-lg w-100 mt-3', null, [ic('check2-circle'), (C.editing ? 'Guardar cambios · ' : 'Guardar pedido · ') + $$(total)]);
       go.onclick = () => seguro(async () => {
         if (!items.length) return toast('Agrega al menos un producto.', false);
@@ -306,15 +297,18 @@ function caja() {
           await rpc('update_order', { p_order: C.editing, p_customer: C.customer ? Number(C.customer) : null, p_kind: C.kind, p_note: C.note || null, p_items: payload });
           const b = C.back; st.cart = newCart(); st.view = b || 'caja'; toast('Pedido actualizado'); render(); return;
         }
+        const d = ESTADOS[C.kind].find(x => x[0] === C.estado); if (!d) return toast('Elige el estado de la venta.', false);
         const v = C.paid === '' ? 0 : r2(Number(C.paid));
         if (!Number.isFinite(v) || v < 0 || v > 10000000) return toast('Monto recibido inválido.', false);
         if (C.method !== 'efectivo' && v > total + 0.001) return toast('Solo en efectivo se da cambio.', false);
-        const full = Math.min(v, total) >= total && total > 0, entregar = C.kind === 'mostrador' && C.deliver && full;
-        if (!await confirmar(`¿Guardar el pedido por ${$$(total)}${v ? ' con pago de ' + $$(Math.min(v, total)) : ''}?`)) return;
-        const oid = await rpc('create_order', { p_customer: C.customer ? Number(C.customer) : null, p_kind: C.kind, p_note: C.note || null, p_items: payload, p_tendered: v, p_method: C.method, p_deliver: entregar });
+        const er = validaEstado(d[1], Math.min(v, total), total); if (er) return toast(er, false);
+        if (!await confirmar(`¿Guardar como ${C.estado} por ${$$(total)}${v ? ' con pago de ' + $$(Math.min(v, total)) : ''}?`)) return;
+        const oid = await rpc('create_order', { p_customer: C.customer ? Number(C.customer) : null, p_kind: C.kind, p_note: C.note || null,
+          p_items: payload, p_tendered: v, p_method: C.method, p_deliver: d[2] === 1 });
+        const tipo = C.kind === 'apartado' ? 'apartado' : 'nuevo';
         st.cart = newCart(); render();
+        verTicket(await cargarPedido(oid), cat, tipo);
         if (v > total) msgModal('Cambio a entregar', $$(r2(v - total)), `Recibido ${$$(v)} · Cuenta ${$$(total)}`);
-        verTicket(await cargarPedido(oid), cat);
       });
       cart.append(go); right.append(cart);
 
@@ -527,4 +521,89 @@ function almacenamiento() {
     });
     box.append(tabs, lim);
   });
+}
+
+/* ---------- Estados de venta elegibles en Caja ---------- */
+const ESTADOS = {
+  mostrador: [['PAGADO ENTREGADO', 'pagado', 1], ['PAGADO X ENTREGAR', 'pagado', 0], ['ABONADO X COBRAR X ENTREGAR', 'abono', 0], ['X COBRAR X ENTREGAR', 'nada', 0]],
+  envio: [['PAGADO X ENTREGAR', 'pagado', 0], ['ABONADO X COBRAR X ENTREGAR', 'abono', 0], ['X COBRAR X ENTREGAR', 'nada', 0]],
+  apartado: [['APARTADO X ABONAR X ENTREGAR', 'abonable', 0], ['APARTADO PAGADO X ENTREGAR', 'pagado', 0]]
+};
+// El sistema no elige el estado: solo avisa si no coincide con lo cobrado
+function validaEstado(tipo, ap, total) {
+  if (tipo === 'pagado' && !(ap >= total)) return 'Este estado requiere el pago completo.';
+  if (tipo === 'abono' && !(ap > 0 && ap < total)) return 'Este estado requiere un pago parcial (mayor a 0 y menor al total).';
+  if (tipo === 'nada' && ap > 0) return 'Este estado es sin pago: deja "Recibido" vacío o elige ABONADO / PAGADO.';
+  if (tipo === 'abonable' && total > 0 && ap >= total) return 'Ya cubre el total: elige APARTADO PAGADO X ENTREGAR.';
+  return '';
+}
+
+/* ---------- Ticket en PDF real (sin librerías) y compartir ---------- */
+const TW = 42;
+const tpad = (l, r) => { l = String(l); r = String(r); return l.slice(0, Math.max(0, TW - r.length - 1)).padEnd(TW - r.length) + r; };
+const tctr = s => ' '.repeat(Math.max(0, Math.floor((TW - s.length) / 2))) + s;
+const twrap = (s, w = TW) => { const out = []; let cur = ''; String(s).split(/\s+/).forEach(wd => { if ((cur + ' ' + wd).trim().length > w) { if (cur) out.push(cur); cur = wd; } else cur = (cur + ' ' + wd).trim(); }); if (cur) out.push(cur); return out; };
+function ticketLines(o, cat) {
+  const L = [], add = (t, b) => L.push({ t, b: !!b }), cu = o.customers, pg = sum(o.payments), raya = '-'.repeat(TW);
+  add(tctr((APP_CONFIG.BUSINESS_NAME || 'Tamales').toUpperCase()), 1); add(tctr('Comprobante de compra')); add(raya);
+  add(`Pedido #${o.id}`); add(fdt(o.created_at)); add('Tipo: ' + KIND[o.kind]);
+  if (cu) { twrap('Cliente: ' + cu.name).forEach(x => add(x)); if (o.kind !== 'mostrador') twrap('Entrega: ' + dirCliente(cu)).forEach(x => add(x)); }
+  if (o.delivery) add('Envío: ' + DL[o.delivery]);
+  add(raya);
+  lineas(o, cat).forEach(l => { add(tpad(l.txt, $$(l.total))); if (l.sub) twrap('  ' + l.sub).forEach(x => add(x)); });
+  add(raya); add(tpad('TOTAL', $$(o.total)), 1);
+  o.payments.forEach(p => { add(tpad('Pago ' + p.method, $$(p.amount))); if (p.tendered && Number(p.tendered) > Number(p.amount)) add(tpad('  Recibido ' + $$(p.tendered) + ' Cambio', $$(Number(p.tendered) - Number(p.amount)))); });
+  add(tpad('Pagado', $$(pg))); add(tpad('Saldo', $$(Math.max(0, Number(o.total) - pg)))); add(raya);
+  add(tctr(etiqueta(o)[0]), 1); if (o.note) twrap('Nota: ' + o.note).forEach(x => add(x));
+  add(tctr('Gracias por su compra'));
+  return L;
+}
+function pdfTicket(lines) {
+  const Wd = 226.8, fs = 8, lh = 11, m = 10, H = Math.max(200, lines.length * lh + 2 * m);
+  const esc = s => String(s).replace(/[\\()]/g, '\\$&').replace(/[^\x20-\xFF]/g, '?');
+  let c = ''; lines.forEach((l, i) => { c += `BT /${l.b ? 'F2' : 'F1'} ${fs} Tf ${m} ${(H - m - fs - i * lh).toFixed(1)} Td (${esc(l.t)}) Tj ET\n`; });
+  const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${Wd} ${H}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>`,
+    `<< /Length ${c.length} >>\nstream\n${c}endstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>'];
+  let out = '%PDF-1.4\n'; const off = [];
+  objs.forEach((o, i) => { off.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xr = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + off.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') + `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xr}\n%%EOF`;
+  const u = new Uint8Array(out.length); for (let i = 0; i < out.length; i++) u[i] = out.charCodeAt(i) & 255;
+  return new Blob([u], { type: 'application/pdf' });
+}
+function descargar(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+async function compartirPDF(o, cat, texto) {
+  cat = cat || await getCat();
+  const blob = pdfTicket(ticketLines(o, cat)), file = new File([blob], `ticket-${o.id}.pdf`, { type: 'application/pdf' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'Ticket #' + o.id, text: texto }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  descargar(blob, file.name); toast('PDF descargado. Adjúntalo en el chat de WhatsApp.');
+}
+function mensaje(o, tipo) {
+  const cu = o.customers, pg = sum(o.payments), saldo = Math.max(0, Number(o.total) - pg);
+  const M = { nuevo: `recibimos tu pedido #${o.id} por ${$$(o.total)}. Estado: ${etiqueta(o)[0]}.`,
+    apartado: `tu apartado #${o.id} quedó registrado por ${$$(o.total)}. Abonado ${$$(pg)}, saldo ${$$(saldo)}.`,
+    pago: `registramos tu pago en el pedido #${o.id}. Pagado ${$$(pg)}, saldo ${$$(saldo)}.`,
+    listo: `tu pedido #${o.id} ya está listo.`, camino: `tu pedido #${o.id} ya va en camino.`, entregado: `tu pedido #${o.id} fue entregado. ¡Buen provecho!` };
+  return `Hola${cu ? ' ' + cu.name : ''}, ${M[tipo] || M.nuevo} (${APP_CONFIG.BUSINESS_NAME || 'Tamales'})`;
+}
+// Aviso al cliente: ticket en PDF + mensaje por WhatsApp
+function avisar(o, tipo, cat) {
+  const cu = o.customers, tel = cu && cu.phone ? String(cu.phone).replace(/\D/g, '') : '', msg = mensaje(o, tipo);
+  const ov = h('div', 'ov'), bx = h('div', 'box');
+  const pdf = h('button', 'btn btn-acc w-100 mb-2', null, [ic('file-earmark-pdf'), '1. Compartir ticket en PDF']); pdf.onclick = () => seguro(() => compartirPDF(o, cat, msg));
+  bx.append(h('h5', null, 'Avisar al cliente'), h('p', 'small text-secondary', msg), pdf);
+  if (tel) {
+    const a = h('a', 'btn btn-success w-100 mb-2', null, [ic('whatsapp'), '2. Enviar mensaje por WhatsApp']);
+    a.href = 'https://wa.me/' + (tel.length === 10 ? (APP_CONFIG.WA_COUNTRY || '52') + tel : tel) + '?text=' + encodeURIComponent(msg); a.target = '_blank'; a.rel = 'noopener'; bx.append(a);
+  } else bx.append(h('p', 'small text-danger', 'El cliente no tiene celular registrado.'));
+  const no = h('button', 'btn btn-outline-secondary w-100', 'Cerrar'); no.onclick = () => ov.remove();
+  bx.append(h('p', 'small text-secondary', 'WhatsApp no deja adjuntar el PDF desde un enlace: en el celular el paso 1 abre el menú de compartir; en computadora descarga el PDF para que lo adjuntes.'), no);
+  ov.append(bx); document.body.append(ov);
 }
