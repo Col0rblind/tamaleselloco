@@ -148,7 +148,7 @@ function cocina(){
   box.append(h('div','d-flex flex-wrap gap-2 mb-3',null,byKind('cantidad').map(c=>{
     const b=h('button','btn btn-acc btn-lg',String(c.value)); b.onclick=()=>guardar(c.value); return b;})));
   const n=h('input','form-control'); n.type='number'; n.min=1; n.max=500; n.step=1; n.inputMode='numeric'; n.placeholder='Otra cantidad'; n.value=st.draft.custom||''; n.oninput=()=>{st.draft.custom=n.value};
-  const go=h('button','btn btn-outline-secondary',null,[ic('pencil'),'Personalizar']); go.onclick=()=>guardar(n.value);
+  const go=h('button','btn btn-outline-secondary',null,[ic('pencil'),'Ingresar']); go.onclick=()=>guardar(n.value);
   box.append(h('div','input-group',null,[n,go]));
   return box;
 }
