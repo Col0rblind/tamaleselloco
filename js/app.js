@@ -5,7 +5,7 @@ const app = document.getElementById('app');
 const st = { me:null, cats:[], batches:[], salsa:null, view:'cocina', users:[], resets:[], draft:{}, cart:null, range:'hoy' };
 
 // Construcción de DOM sin innerHTML: el texto de usuarios nunca se interpreta como HTML (anti-XSS)
-function h(tag, cls, txt, kids){ const e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; (kids||[]).forEach(k=>e.append(k)); return e; }
+function h(tag, cls, txt, kids){ const e=document.createElement(tag); if(cls) e.className=cls; if(Array.isArray(txt)){ kids=txt; txt=null; } if(txt!=null) e.textContent=txt; (kids||[]).forEach(k=>e.append(k)); return e; }
 const ic = n => h('i','bi bi-'+n+' me-1');
 const isAdmin = () => st.me && ['master','administrador'].includes(st.me.role);
 

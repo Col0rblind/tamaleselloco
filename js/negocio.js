@@ -13,13 +13,52 @@ const safe = s => /^[=+\-@]/.test(String(s)) ? "'" + s : String(s);
 const badge = (t, c) => h('span', 'badge bg-' + c + ' me-1', t);
 const canCash = () => isAdmin() || ['cajero', 'general'].includes(st.me.cargo);
 const canKitchen = () => isAdmin() || ['cocinero', 'general'].includes(st.me.cargo);
-const newCart = () => ({ items: {}, prices: {}, kind: 'mostrador', customer: '', note: '', pago: newPago(), fecha: '', estado: '', entrega: '', editing: null, back: 'caja' });
+const newCart = () => ({ items: {}, prices: {}, kind: 'mostrador', customer: '', note: '', pago: newPago(), fecha: '', hora: '', estado: '', entrega: '', editing: null, back: 'caja' });
 const bad = m => { const e = new Error(m); e.msg = m; return e; };
-const ORD = 'id,total,status,kind,delivery,delivery_date,note,created_at,customer_id,stock_debited,created_by,assigned_to,delivered_by,customers(name,phone,colony,street,street_number,address),payments(id,amount,method,tendered,created_at,created_by),order_items(qty,unit_price,product_id)';
+const horaMilitar = t => t ? `${String(t).slice(0, 5)} hrs` : '';
+const fechaHoraLarga = (f, h) => { if (!f) return ''; const fl = fechaLarga(f); return h ? `${fl} a las ${horaMilitar(h)}` : fl; };
+const fechaHoraCorta = (f, h) => { if (!f) return ''; const fc = fechaCorta(f); return h ? `${fc} · ${horaMilitar(h)}` : fc; };
+let ORD = 'id,total,status,kind,delivery,delivery_date,delivery_time,note,created_at,customer_id,stock_debited,created_by,assigned_to,delivered_by,customers(name,phone,colony,street,street_number,address),payments(id,amount,method,tendered,created_at,created_by),order_items(qty,unit_price,product_id)';
 
 /* ---------- Utilidades ---------- */
-function errDb(e) { if (!e) return; const x = new Error(e.message); if (e.code === 'P0001') x.msg = e.message; else console.error(e); throw x; }
+function errDb(e) {
+  if (!e) return;
+  if (e.message && e.message.includes('delivery_time')) {
+    ORD = ORD.replace(',delivery_time', '');
+  }
+  const x = new Error(e.message);
+  if (e.code === 'P0001') x.msg = e.message; else console.error(e);
+  throw x;
+}
 async function rpc(name, args) { const { data, error } = await sb.rpc(name, args); errDb(error); return data; }
+async function crearPedidoRPC(params) {
+  try {
+    return await rpc('create_order', params);
+  } catch (err) {
+    if (params.p_delivery_time !== undefined && (String(err?.message || '').includes('p_delivery_time') || String(err?.message || '').includes('create_order') || err?.code === 'PGRST202')) {
+      const fallback = { ...params };
+      delete fallback.p_delivery_time;
+      const res = await rpc('create_order', fallback);
+      toast('Pedido guardado. Aplica migracion_v8.sql en Supabase para registrar la hora militar.', true);
+      return res;
+    }
+    throw err;
+  }
+}
+async function updatePedidoRPC(params) {
+  try {
+    return await rpc('update_order', params);
+  } catch (err) {
+    if (params.p_delivery_time !== undefined && (String(err?.message || '').includes('p_delivery_time') || String(err?.message || '').includes('update_order') || err?.code === 'PGRST202')) {
+      const fallback = { ...params };
+      delete fallback.p_delivery_time;
+      const res = await rpc('update_order', fallback);
+      toast('Pedido actualizado. Aplica migracion_v8.sql en Supabase para registrar la hora militar.', true);
+      return res;
+    }
+    throw err;
+  }
+}
 function lazy(fn) {
   const box = h('div'); box.append(h('p', 'text-secondary', null, [ic('hourglass-split'), 'Cargando…']));
   fn(box).catch(e => { console.error(e); box.replaceChildren(h('p', 'text-danger', e && e.msg ? e.msg : 'No se pudo cargar. Revisa tu conexión.')); });
@@ -107,6 +146,7 @@ function verTicket(o, cat, tipo) {
   t.id = 'print-ticket';
   t.append(h('h5', 'text-center mb-0', APP_CONFIG.BUSINESS_NAME || 'Tamales'), h('div', 'text-center small mb-2', 'Comprobante de compra'),
     h('div', 'small', `Pedido #${o.id} · ${fdt(o.created_at)}`), h('div', 'small', `Tipo: ${KIND[o.kind]}${cu ? ' · Cliente: ' + cu.name : ''}`));
+  if (o.delivery_date) t.append(h('div', 'small fw-semibold mt-1', 'Entrega programada: ' + fechaHoraLarga(o.delivery_date, o.delivery_time)));
   if (o.kind === 'envio' && cu) t.append(h('div', 'small', 'Entrega en: ' + dirCliente(cu)), h('div', 'small', 'Estado del envío: ' + (DL[o.delivery] || '')));
   t.append(h('hr'));
   lineas(o, cat).forEach(l => {
@@ -131,7 +171,7 @@ function verDetalle(o, cat) {
   bx.append(h('h5', null, `Pedido #${o.id}`), h('div', 'mb-2', null, [badge(lab, col), badge(KIND[o.kind], 'dark'), ...(o.delivery ? [badge(DL[o.delivery], 'primary')] : []), ...(o.status === 'listo' ? [badge('Listo', 'info')] : [])]),
     h('div', 'small text-secondary mb-2', fdt(o.created_at) + (cu ? ' · ' + cu.name : '')));
   if (cu && o.kind !== 'mostrador') bx.append(h('div', 'small', null, [ic('geo-alt'), dirCliente(cu) + ' · ', ic('telephone'), cu.phone || 'sin celular']));
-  if (o.delivery_date) bx.append(h('div', 'small mt-1', null, [ic('calendar-event'), 'Entrega programada: ' + fechaLarga(o.delivery_date)]));
+  if (o.delivery_date) bx.append(h('div', 'small mt-1 fw-semibold text-primary', null, [ic('calendar-event'), ' Entrega programada: ' + fechaHoraLarga(o.delivery_date, o.delivery_time)]));
   bx.append(h('hr', 'my-2'));
   lineas(o, cat).forEach(l => { bx.append(h('div', 'd-flex justify-content-between', null, [h('span', null, `${l.txt} (${$$(l.unit)} c/u)`), h('span', null, $$(l.total))])); if (l.sub) bx.append(h('div', 'small text-secondary ps-2', 'Incluye: ' + l.sub)); });
   bx.append(h('hr', 'my-2'), h('div', 'd-flex justify-content-between fw-bold', null, [h('span', null, 'Total'), h('span', null, $$(o.total))]),
@@ -148,7 +188,7 @@ function verDetalle(o, cat) {
 function editar(o) {
   const items = {}, prices = {};
   (o.order_items || []).forEach(i => { items[i.product_id] = (items[i.product_id] || 0) + i.qty; prices[i.product_id] = Number(i.unit_price); });
-  st.cart = { ...newCart(), items, prices, kind: o.kind, customer: o.customer_id ? String(o.customer_id) : '', note: o.note || '', fecha: o.delivery_date || '',
+  st.cart = { ...newCart(), items, prices, kind: o.kind, customer: o.customer_id ? String(o.customer_id) : '', note: o.note || '', fecha: o.delivery_date || '', hora: o.delivery_time ? o.delivery_time.slice(0, 5) : '',
     entrega: o.kind === 'envio' ? 'domicilio' : 'sucursal', editing: o.id, back: st.view };
   st.view = 'caja'; render();
 }
@@ -187,7 +227,7 @@ function pedidoCard(o, cat) {
   c.append(h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${cu ? cu.name : 'Mostrador'}`), h('strong', null, $$(o.total))]),
     h('div', 'my-1', null, [badge(t, col), badge(KIND[o.kind], 'dark'), ...(o.status === 'listo' ? [badge('Listo', 'info')] : []), ...(o.delivery && o.status !== 'entregado' ? [badge(DL[o.delivery], 'primary')] : []),
       ...(o.kind === 'envio' && !o.assigned_to && ['pendiente', 'listo'].includes(o.status) ? [badge('Sin repartidor', 'warning')] : []),
-      ...(o.delivery_date ? [badge('Entrega: ' + fechaCorta(o.delivery_date), o.delivery_date < hoyStr() && ['pendiente', 'listo'].includes(o.status) ? 'danger' : 'dark')] : [])]));
+      ...(o.delivery_date ? [badge('Entrega: ' + fechaHoraCorta(o.delivery_date, o.delivery_time), o.delivery_date < hoyStr() && ['pendiente', 'listo'].includes(o.status) ? 'danger' : 'dark')] : [])]));
   lineas(o, cat).forEach(l => c.append(h('div', 'small', l.txt + (l.sub ? ` (${l.sub})` : ''))));
   if (o.kind !== 'mostrador' && cu) c.append(h('div', 'small text-secondary mt-1', null, [ic('geo-alt'), dirCliente(cu) + ' · ', ic('telephone'), cu.phone || 'sin celular']));
   if (o.note) c.append(h('div', 'small fst-italic', 'Nota: ' + o.note));
@@ -433,7 +473,7 @@ function caja() {
       } else {
         const selCard = h('div', 'card p-2 d-flex flex-row align-items-center gap-2 border-primary-subtle bg-primary bg-opacity-10');
         const info = h('div', 'flex-grow-1 text-truncate', null, [
-          h('div', 'fw-bold text-truncate', [ic('person-fill'), ' ' + cliActual.name]),
+          h('div', 'fw-bold text-truncate', null, [ic('person-fill'), ' ' + cliActual.name]),
           h('div', 'small text-secondary text-truncate', `${cliActual.phone || 'Sin cel'} · ${dirCliente(cliActual)}`)
         ]);
         const btnCambiar = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('search')]);
@@ -470,8 +510,13 @@ function caja() {
         const pagoOk = calcPago(pagosDe(C.pago), total).ap >= total && total > 0;
         cart.append(h('label', 'small text-secondary mt-2', 'Entrega'), en, ...(C.entrega ? [h('div', 'small text-secondary mb-1', C.entrega === 'sucursal' ? 'Pasará a Apartados hasta entregarlo en sucursal.' :
           (pagoOk || C.editing ? 'Pasará a Envíos, en espera de asignar repartidor.' : 'Con saldo pendiente: estará en Apartados hasta que esté listo; después pasa a Envíos y el repartidor cobra en el domicilio.'))] : []));
-        const fd = h('input', 'form-control mb-2'); fd.type = 'date'; fd.min = hoyStr(); fd.value = C.fecha; fd.onchange = () => { C.fecha = fd.value; };
-        cart.append(h('label', 'small text-secondary mt-1', 'Fecha de entrega'), fd);
+        const fd = h('input', 'form-control'); fd.type = 'date'; fd.min = hoyStr(); fd.value = C.fecha; fd.onchange = () => { C.fecha = fd.value; };
+        const fh = h('input', 'form-control'); fh.type = 'time'; fh.value = C.hora || ''; fh.placeholder = '14:00'; fh.onchange = () => { C.hora = fh.value; };
+        const rowFechas = h('div', 'row g-2 mb-2', null, [
+          h('div', 'col-12 col-sm-6', null, [h('label', 'small text-secondary mb-1', 'Fecha de entrega'), fd]),
+          h('div', 'col-12 col-sm-6', null, [h('label', 'small text-secondary mb-1', 'Hora militar (24 hrs)'), fh])
+        ]);
+        cart.append(rowFechas);
       }
       upd();
       const payload = () => items.map(p => ({ product_id: p.id, qty: C.items[p.id], price: price(p) }));
@@ -483,8 +528,10 @@ function caja() {
           if (!C.entrega) return toast('Elige si se entrega en sucursal o a domicilio.', false);
           const kindE = C.entrega === 'domicilio' ? 'envio' : (C.kind === 'envio' ? 'mostrador' : C.kind), cliE = cu.data.find(x => String(x.id) === C.customer);
           if (kindE === 'envio' && !(cliE && ((cliE.street && cliE.colony && cliE.street_number) || cliE.address))) return toast('El cliente no tiene dirección completa. Edítalo en Clientes.', false);
-          if (!await confirmar(`¿Guardar los cambios del pedido #${C.editing}?`)) return;
-          await rpc('update_order', { p_order: C.editing, p_customer: Number(C.customer), p_kind: kindE, p_note: C.note || null, p_items: payload(), p_delivery_date: C.fecha || null });
+          if (!C.fecha) return toast('Elige la fecha de entrega.', false);
+          if (!C.hora) return toast('Elige la hora militar de entrega (ej. 14:30).', false);
+          if (!await confirmar(`¿Guardar los cambios del pedido #${C.editing} para el ${fechaHoraLarga(C.fecha, C.hora)}?`)) return;
+          await updatePedidoRPC({ p_order: C.editing, p_customer: Number(C.customer), p_kind: kindE, p_note: C.note || null, p_items: payload(), p_delivery_date: C.fecha || null, p_delivery_time: C.hora || null });
           const b = C.back; st.cart = newCart(); st.view = b || 'caja'; toast('Pedido actualizado'); render(); return;
         }
         const d = defs.find(x => x[0] === C.estado); if (!d) return toast('Elige el estado de la venta.', false);
@@ -495,10 +542,11 @@ function caja() {
         if (!ya && C.entrega === 'domicilio' && !(cli && ((cli.street && cli.colony && cli.street_number) || cli.address))) return toast('El cliente no tiene dirección completa (colonia, calle y número). Edítalo en Clientes.', false);
         if (!ya && !C.fecha) return toast('Elige la fecha de entrega.', false);
         if (!ya && C.fecha < hoyStr()) return toast('La fecha de entrega no puede ser anterior a hoy.', false);
+        if (!ya && !C.hora) return toast('Elige la hora militar de entrega (ej. 14:30).', false);
         const pays = pagosDe(C.pago), c = calcPago(pays, total); if (c.error) return toast(c.error, false);
         const er = validaEstado(d[1], c.ap, total); if (er) return toast(er, false);
-        if (!await confirmar(`¿Guardar como ${C.estado} por ${$$(total)}${c.ap ? ' con pago de ' + $$(c.ap) : ''}${ya ? '' : ' ' + (ya ? '' : (C.entrega === 'domicilio' ? ' a domicilio' : ' en sucursal')) + (ya ? '' : ' el ' + C.fecha)}?`)) return;
-        const oid = await rpc('create_order', { p_customer: C.customer ? Number(C.customer) : null, p_kind: !ya && C.entrega === 'domicilio' ? 'envio' : 'mostrador', p_note: C.note || null, p_items: payload(), p_pays: pays, p_deliver: ya, p_delivery_date: ya ? null : C.fecha });
+        if (!await confirmar(`¿Guardar como ${C.estado} por ${$$(total)}${c.ap ? ' con pago de ' + $$(c.ap) : ''}${ya ? '' : ' ' + (C.entrega === 'domicilio' ? ' a domicilio' : ' en sucursal') + ' el ' + fechaHoraLarga(C.fecha, C.hora)}?`)) return;
+        const oid = await crearPedidoRPC({ p_customer: C.customer ? Number(C.customer) : null, p_kind: !ya && C.entrega === 'domicilio' ? 'envio' : 'mostrador', p_note: C.note || null, p_items: payload(), p_pays: pays, p_deliver: ya, p_delivery_date: ya ? null : C.fecha, p_delivery_time: ya ? null : C.hora });
         st.cart = newCart(); render(); verTicket(await cargarPedido(oid), cat, 'nuevo');
         if (c.cambio > 0) msgModal('Cambio a entregar', $$(c.cambio), `Recibido ${$$(c.recibido)} · Cuenta ${$$(total)}`);
       });
@@ -573,8 +621,8 @@ function ventasLista() {
     ex.onclick = () => seguro(async () => {
       if (typeof XLSX === 'undefined') return toast('No se cargó la librería de Excel.', false);
       if (!await confirmar('¿Descargar estas ventas en Excel?')) return;
-      const rows = [['#', 'Fecha', 'Cliente', 'Tipo', 'Estado', 'Fecha de entrega', 'Registró', 'Repartidor', 'Entregó', 'Productos', 'Total', 'Pagado', 'Saldo']].concat(data.map(o => {
-        const pg = sum(o.payments); return [o.id, fdt(o.created_at), safe(o.customers ? o.customers.name : 'Mostrador'), KIND[o.kind], etiqueta(o)[0], o.delivery_date || '', staffName(o.created_by), staffName(o.assigned_to), staffName(o.delivered_by),
+      const rows = [['#', 'Fecha', 'Cliente', 'Tipo', 'Estado', 'Fecha de entrega', 'Hora de entrega', 'Registró', 'Repartidor', 'Entregó', 'Productos', 'Total', 'Pagado', 'Saldo']].concat(data.map(o => {
+        const pg = sum(o.payments); return [o.id, fdt(o.created_at), safe(o.customers ? o.customers.name : 'Mostrador'), KIND[o.kind], etiqueta(o)[0], o.delivery_date || '', o.delivery_time ? o.delivery_time.slice(0, 5) : '', staffName(o.created_by), staffName(o.assigned_to), staffName(o.delivered_by),
           safe(lineas(o, cat).map(l => l.txt).join('; ')), Number(o.total), pg, o.status === 'cancelado' ? 0 : Number(o.total) - pg]; }));
       const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Ventas');
       XLSX.writeFile(wb, `ventas_${new Date().toISOString().slice(0, 10)}.xlsx`); logEv('exportar', 'Ventas: ' + data.length + ' pedidos');
@@ -776,7 +824,7 @@ const twrap = (s, w = TW) => { const out = []; let cur = ''; String(s).split(/\s
 function ticketLines(o, cat) {
   const L = [], add = (t, b) => L.push({ t, b: !!b }), cu = o.customers, pg = sum(o.payments), raya = '-'.repeat(TW);
   add(tctr((APP_CONFIG.BUSINESS_NAME || 'Tamales').toUpperCase()), 1); add(tctr('Comprobante de compra')); add(raya);
-  add(`Pedido #${o.id}`); add(fdt(o.created_at)); add('Tipo: ' + KIND[o.kind]); if (o.delivery_date) add('Entrega: ' + fechaCorta(o.delivery_date)); if (o.created_by && staffName(o.created_by) !== '—') add('Atendió: ' + staffName(o.created_by));
+  add(`Pedido #${o.id}`); add(fdt(o.created_at)); add('Tipo: ' + KIND[o.kind]); if (o.delivery_date) add('Entrega: ' + fechaHoraCorta(o.delivery_date, o.delivery_time)); if (o.created_by && staffName(o.created_by) !== '—') add('Atendió: ' + staffName(o.created_by));
   if (cu) { twrap('Cliente: ' + cu.name).forEach(x => add(x)); if (o.kind !== 'mostrador') twrap('Entrega: ' + dirCliente(cu)).forEach(x => add(x)); }
   if (o.delivery) add('Envío: ' + DL[o.delivery]);
   add(raya);
@@ -817,10 +865,11 @@ async function compartirPDF(o, cat, texto) {
 }
 function mensaje(o, tipo) {
   const cu = o.customers, pg = sum(o.payments), saldo = Math.max(0, Number(o.total) - pg);
-  const M = { nuevo: `recibimos tu pedido #${o.id} por ${$$(o.total)}. Estado: ${etiqueta(o)[0]}.`,
-    apartado: `tu apartado #${o.id} quedó registrado por ${$$(o.total)}. Abonado ${$$(pg)}, saldo ${$$(saldo)}.`,
-    pago: `registramos tu pago en el pedido #${o.id}. Pagado ${$$(pg)}, saldo ${$$(saldo)}.`,
-    listo: `tu pedido #${o.id} ya está listo.`, camino: `tu pedido #${o.id} ya va en camino.`, entregado: `tu pedido #${o.id} fue entregado. ¡Buen provecho!` };
+  const prog = o.delivery_date ? ` Entrega programada: ${fechaHoraLarga(o.delivery_date, o.delivery_time)}.` : '';
+  const M = { nuevo: `recibimos tu pedido #${o.id} por ${$$(o.total)}. Estado: ${etiqueta(o)[0]}.${prog}`,
+    apartado: `tu apartado #${o.id} quedó registrado por ${$$(o.total)}. Abonado ${$$(pg)}, saldo ${$$(saldo)}.${prog}`,
+    pago: `registramos tu pago en el pedido #${o.id}. Pagado ${$$(pg)}, saldo ${$$(saldo)}.${prog}`,
+    listo: `tu pedido #${o.id} ya está listo.${prog}`, camino: `tu pedido #${o.id} ya va en camino.`, entregado: `tu pedido #${o.id} fue entregado. ¡Buen provecho!` };
   return `Hola${cu ? ' ' + cu.name : ''}, ${M[tipo] || M.nuevo} (${APP_CONFIG.BUSINESS_NAME || 'Tamales'})`;
 }
 // Aviso al cliente: ticket en PDF + mensaje por WhatsApp
@@ -896,8 +945,8 @@ async function borrarConExcel(t, l, dias) {
   } else {
     const [cat, rows] = await Promise.all([getCat(), traer(() => sb.from('orders').select(ORD).in('status', ['entregado', 'cancelado']).lt('created_at', corte).order('created_at').order('id'))]);
     const ok = rows.filter(o => o.status === 'cancelado' || Number(o.total) - sum(o.payments) <= 0.001);
-    filas = [['#', 'Fecha', 'Cliente', 'Tipo', 'Estado', 'Fecha de entrega', 'Registró', 'Repartidor', 'Entregó', 'Productos', 'Pagos', 'Total', 'Pagado']].concat(ok.map(o => [o.id, fdt(o.created_at),
-      safe(o.customers ? o.customers.name : 'Mostrador'), KIND[o.kind], etiqueta(o)[0], o.delivery_date || '', staffName(o.created_by), staffName(o.assigned_to), staffName(o.delivered_by),
+    filas = [['#', 'Fecha', 'Cliente', 'Tipo', 'Estado', 'Fecha de entrega', 'Hora de entrega', 'Registró', 'Repartidor', 'Entregó', 'Productos', 'Pagos', 'Total', 'Pagado']].concat(ok.map(o => [o.id, fdt(o.created_at),
+      safe(o.customers ? o.customers.name : 'Mostrador'), KIND[o.kind], etiqueta(o)[0], o.delivery_date || '', o.delivery_time ? o.delivery_time.slice(0, 5) : '', staffName(o.created_by), staffName(o.assigned_to), staffName(o.delivered_by),
       safe(lineas(o, cat).map(x => x.txt).join('; ')), o.payments.map(p => `${p.method} ${p.amount}`).join('; '), Number(o.total), sum(o.payments)])); nombre = 'ventas_eliminadas';
   }
   const n = filas.length - 1;
@@ -952,6 +1001,7 @@ function listaPedidos(titulo, vacio, filtro, conRepartidor) {
       sel.value = F.rep || ''; sel.onchange = () => { F.rep = sel.value; render(); }; box.append(sel);
     }
     const data = r.data.filter(filtro).filter(o => !conRepartidor || st.me.cargo === 'repartidor' || !F.rep || (F.rep === 'none' ? !o.assigned_to : o.assigned_to === F.rep));
+    data.sort((a, b) => ((a.delivery_date || '9999') + ' ' + (a.delivery_time || '99:99')).localeCompare((b.delivery_date || '9999') + ' ' + (b.delivery_time || '99:99')));
     const tam = data.reduce((s, o) => s + (o.order_items || []).reduce((x, i) => x + i.qty, 0), 0);
     if (!data.length) box.append(h('p', 'text-secondary', vacio)); else box.append(h('p', 'small text-secondary', `${data.length} pedidos`));
     data.forEach(o => box.append(pedidoCard(o, cat)));
@@ -987,6 +1037,7 @@ function apartados() {
         if (A.fecha && d !== A.fecha) return false;
         return true;
       });
+      data.sort((a, b) => ((a.delivery_date || '9999') + ' ' + (a.delivery_time || '99:99')).localeCompare((b.delivery_date || '9999') + ' ' + (b.delivery_time || '99:99')));
       lista.replaceChildren(); cnt.textContent = `${data.length} de ${base.length} apartados`;
       if (!data.length) lista.append(h('p', 'text-secondary', base.length ? 'No hay apartados con esos filtros.' : 'No hay apartados pendientes.'));
       data.forEach(o => lista.append(pedidoCard(o, cat)));
@@ -1032,18 +1083,19 @@ function calendario() {
       h('span', 'acc fw-semibold', `${r.data.length} pedidos · ${tam(r.data).toLocaleString('es-MX')} tamales por entregar`), ...(v.count ? [badge(`${v.count} vencidos`, 'danger')] : [])]);
     const diaCard = (f, os) => {
       const c = h('div', 'card p-3 mb-3' + (f === hoy ? ' border-2' : '')), sab = new Map();
-      os.forEach(o => (o.order_tamales || []).forEach(t => sab.set(t.salsa_id, (sab.get(t.salsa_id) || 0) + t.qty)));
-      c.append(h('div', 'd-flex justify-content-between flex-wrap gap-2', null, [h('strong', 'text-capitalize', fechaLarga(f) + (f === hoy ? ' (hoy)' : '')), h('span', f < hoy ? 'text-danger fw-semibold' : 'acc fw-semibold', `${os.length} pedidos · ${tam(os).toLocaleString('es-MX')} tamales`)]));
+      const sorted = [...os].sort((x, y) => (x.delivery_time || '99:99').localeCompare(y.delivery_time || '99:99'));
+      sorted.forEach(o => (o.order_tamales || []).forEach(t => sab.set(t.salsa_id, (sab.get(t.salsa_id) || 0) + t.qty)));
+      c.append(h('div', 'd-flex justify-content-between flex-wrap gap-2', null, [h('strong', 'text-capitalize', fechaLarga(f) + (f === hoy ? ' (hoy)' : '')), h('span', f < hoy ? 'text-danger fw-semibold' : 'acc fw-semibold', `${sorted.length} pedidos · ${tam(sorted).toLocaleString('es-MX')} tamales`)]));
       if (sab.size) c.append(h('div', 'small text-secondary mb-1', [...sab].map(([id, q]) => `${salsaName(id)}: ${q}`).join(' · ')));
-      if (!os.length) c.append(h('div', 'small text-secondary', 'Sin entregas programadas.'));
-      os.forEach(o => {
+      if (!sorted.length) c.append(h('div', 'small text-secondary', 'Sin entregas programadas.'));
+      sorted.forEach(o => {
         if (cook) {   // el cocinero solo ve qué hay que preparar: sin dinero ni botones
-          c.append(h('div', 'mt-2 pt-2 border-top', null, [h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${o.customers ? o.customers.name : 'Cliente'}`), h('span', null, `${tam([o])} tamales`)]),
-            ...lineas(o, cat).map(l => h('div', 'small', l.txt + (l.sub ? ` (${l.sub})` : ''))), h('div', 'mt-1', null, [badge(o.status === 'listo' ? 'Listo' : 'Por preparar', o.status === 'listo' ? 'info' : 'warning')])])); return;
+          c.append(h('div', 'mt-2 pt-2 border-top', null, [h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${o.customers ? o.customers.name : 'Cliente'}${o.delivery_time ? ' · ' + horaMilitar(o.delivery_time) : ''}`), h('span', null, `${tam([o])} tamales`)]),
+            ...lineas(o, cat).map(l => h('div', 'small', l.txt + (l.sub ? ` (${l.sub})` : ''))), h('div', 'mt-1', null, [badge(o.status === 'listo' ? 'Listo' : 'Por preparar', o.status === 'listo' ? 'info' : 'warning'), ...(o.delivery_time ? [badge('Hora: ' + horaMilitar(o.delivery_time), 'dark')] : [])])])); return;
         }
         const [lab, col] = etiqueta(o), bt = h('button', 'btn btn-sm btn-outline-secondary w-100 text-start mt-2', null, [
           h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${o.customers ? o.customers.name : 'Mostrador'}`), h('span', null, `${tam([o])} tamales`)]),
-          h('div', 'mt-1', null, [badge(lab, col), ...(o.status === 'listo' ? [badge('Listo', 'info')] : []), ...(o.assigned_to ? [badge('Reparte: ' + staffName(o.assigned_to), 'dark')] : [])])]);
+          h('div', 'mt-1 d-flex flex-wrap gap-1 align-items-center', null, [badge(lab, col), ...(o.delivery_time ? [badge(horaMilitar(o.delivery_time), 'primary')] : []), ...(o.status === 'listo' ? [badge('Listo', 'info')] : []), ...(o.assigned_to ? [badge('Reparte: ' + staffName(o.assigned_to), 'dark')] : [])])]);
         bt.onclick = () => verDetalle(o, cat); c.append(bt);
       });
       return c;
