@@ -85,7 +85,7 @@ function subscribe(){
   if(ch) sb.removeChannel(ch);
   ch=sb.channel('live').on('postgres_changes',{event:'*',schema:'public'},()=>seguro(async()=>{await loadAll(); if(st.view!=='cocina'&&!document.querySelector('.ov')) render();})).subscribe();
 }
-const byKind = k => st.cats.filter(c=>c.kind===k);
+const byKind = (k, all = false) => st.cats.filter(c => c.kind === k && (all || c.active !== false));
 const salsaName = id => (st.cats.find(c=>c.id===id)||{}).name||'?';
 
 /* ---------- Vistas ---------- */
@@ -159,7 +159,8 @@ function dashboard(){
   const wrap=h('div');
   wrap.append(h('div','card p-3 mb-3 text-center',null,[h('div','big',String(total)),h('div',null,'tamales hoy')]));
   const row=h('div','row g-2 mb-3');
-  byKind('salsa').forEach(s=>row.append(h('div','col-6 col-md-3',null,[h('div','card p-2 text-center',null,[h('div','fs-3 fw-bold',String(per[s.id]||0)),h('small',null,s.name)])])));
+  const salsasParaVer = byKind('salsa', true).filter(s => s.active !== false || (per[s.id] || 0) > 0);
+  salsasParaVer.forEach(s=>row.append(h('div','col-6 col-md-3',null,[h('div','card p-2 text-center'+(s.active===false?' opacity-75':''),null,[h('div','fs-3 fw-bold',String(per[s.id]||0)),h('small',null,s.name+(s.active===false?' (inactiva)':''))])])));
   wrap.append(row,h('h6',null,'Últimas ollas'));
   if(!st.batches.length) wrap.append(h('p','text-secondary','Todavía no hay ollas registradas hoy.'));
   st.batches.slice(0,15).forEach(b=>{
@@ -174,28 +175,190 @@ function dashboard(){
 }
 
 function cats(){
-  const wrap=h('div');
-  [['salsa','Salsas'],['cantidad','Botones de cantidad'],['sucursal','Sucursales']].forEach(([kind,title])=>{
-    const box=h('div','card p-3 mb-3'); box.append(h('h6',null,title));
-    byKind(kind).forEach(c=>{
-      const d=h('button','btn btn-sm btn-outline-danger ms-2',null,[h('i','bi bi-x-lg')]); d.title='Eliminar';
-      d.onclick=()=>seguro(async()=>{ if(!await confirmar(`¿Eliminar "${c.name}"?`))return;
-        const {error}=await sb.from('categories').delete().eq('id',c.id);
-        if(error) return toast('No se puede eliminar: ya tiene registros asociados.',false); toast('Eliminado'); });
-      box.append(h('span','d-inline-flex align-items-center me-2 mb-2 chip',c.name,[d]));
+  const wrap = h('div');
+  st.catFilter = st.catFilter || { estado: 'todos', q: '' };
+  const cf = st.catFilter;
+
+  // Barra de filtros superior
+  const fCard = h('div', 'card p-3 mb-3');
+  const fTop = h('div', 'd-flex gap-2 flex-wrap mb-2');
+  const qInp = h('input', 'form-control flex-grow-1');
+  qInp.placeholder = 'Buscar en salsas, cantidades, sucursales...';
+  qInp.value = cf.q;
+  qInp.style.minWidth = '220px';
+
+  const chipsDiv = h('div', 'd-flex gap-2 flex-wrap align-items-center');
+  fTop.append(qInp);
+  fCard.append(fTop, chipsDiv);
+  wrap.append(fCard);
+
+  const sectionsWrap = h('div');
+  wrap.append(sectionsWrap);
+
+  const pintar = () => {
+    chipsDiv.replaceChildren();
+    const allCats = st.cats.filter(c => ['salsa','cantidad','sucursal'].includes(c.kind));
+    const tot = allCats.length;
+    const act = allCats.filter(x => x.active !== false).length;
+    const des = tot - act;
+    [['todos', `Todas (${tot})`], ['activas', `Activas (${act})`], ['deshabilitadas', `Deshabilitadas (${des})`]].forEach(([stKey, lbl]) => {
+      const chip = h('button', 'chip' + (cf.estado === stKey ? ' on' : ''), lbl);
+      chip.onclick = () => { cf.estado = stKey; pintar(); };
+      chipsDiv.append(chip);
     });
-    const inp=h('input','form-control'); inp.maxLength=50; inp.placeholder='Nuevo…'; inp.value=st.draft[kind]||''; inp.oninput=()=>{st.draft[kind]=inp.value};
-    const add=h('button','btn btn-acc',null,[ic('plus-lg'),'Agregar']);
-    add.onclick=()=>seguro(async()=>{
-      const name=inp.value.trim().replace(/\s+/g,' '); let value=null;
-      if(!name) return toast('Escribe un nombre.',false);
-      if(kind==='cantidad'){ value=Number(name); if(!Number.isInteger(value)||value<1||value>500) return toast('Escribe un número de 1 a 500.',false); }
-      if(byKind(kind).some(c=>c.name.toLowerCase()===name.toLowerCase())) return toast('Ya existe.',false);
-      if(!await confirmar(`¿Agregar "${name}"?`)) return;
-      const {error}=await sb.from('categories').insert({kind,name,value}); if(error) throw error; st.draft[kind]=''; toast('Agregado');
+
+    sectionsWrap.replaceChildren();
+
+    const q = cf.q.trim().toLowerCase();
+    const grupos = [
+      ['salsa', 'Salsas', 'Nueva salsa…'],
+      ['cantidad', 'Botones de cantidad', 'Nuevo número (1-500)…'],
+      ['sucursal', 'Sucursales', 'Nueva sucursal…']
+    ];
+
+    grupos.forEach(([kind, title, placeholder]) => {
+      let items = byKind(kind, true);
+      if (q) items = items.filter(c => String(c.name).toLowerCase().includes(q));
+
+      const activas = items.filter(c => c.active !== false);
+      const deshabilitadas = items.filter(c => c.active === false);
+
+      // Si se filtra por estado y no hay elementos de ese tipo, se puede omitir o mostrar vacía
+      if (cf.estado === 'activas' && !activas.length && q) return;
+      if (cf.estado === 'deshabilitadas' && !deshabilitadas.length && q) return;
+
+      const box = h('div', 'card p-3 mb-3');
+      const header = h('div', 'd-flex justify-content-between align-items-center flex-wrap gap-2 mb-2', null, [
+        h('h6', 'mb-0', title),
+        h('span', 'badge bg-secondary-subtle text-secondary border border-secondary-subtle', `${activas.length} activas${deshabilitadas.length ? ` · ${deshabilitadas.length} deshabilitadas` : ''}`)
+      ]);
+      box.append(header);
+
+      // 1. Mostrar categorías activas
+      if (cf.estado !== 'deshabilitadas') {
+        const actDiv = h('div', 'd-flex flex-wrap align-items-center gap-2 mb-2');
+        if (activas.length) {
+          activas.forEach(c => {
+            // Botón Deshabilitar
+            const btnOff = h('button', 'btn btn-sm btn-outline-warning ms-2 p-0 px-1 border-0', null, [ic('eye-slash')]);
+            btnOff.title = 'Deshabilitar (no aparecerá en ventas ni cocina)';
+            btnOff.onclick = () => seguro(async () => {
+              if (!await confirmar(`¿Deshabilitar "${c.name}"?\n\nYa no se podrá seleccionar para nuevos pedidos o lotes, pero se conservará su historial intacto.`)) return;
+              const { error } = await sb.from('categories').update({ active: false }).eq('id', c.id);
+              if (error) throw error;
+              toast('Categoría deshabilitada');
+            });
+
+            // Botón Eliminar
+            const btnDel = h('button', 'btn btn-sm btn-outline-danger ms-1 p-0 px-1 border-0', null, [ic('trash')]);
+            btnDel.title = 'Eliminar';
+            btnDel.onclick = () => seguro(async () => {
+              if (!await confirmar(`¿Eliminar definitivamente "${c.name}"?`)) return;
+              const { error } = await sb.from('categories').delete().eq('id', c.id);
+              if (error) {
+                if (await confirmar(`"${c.name}" ya tiene registros asociados en el historial y no se puede borrar de la base de datos.\n\n¿Deseas deshabilitarla en su lugar?`)) {
+                  await sb.from('categories').update({ active: false }).eq('id', c.id);
+                  toast('Categoría deshabilitada');
+                }
+                return;
+              }
+              toast('Eliminado');
+            });
+
+            const chip = h('span', 'd-inline-flex align-items-center chip pe-1', c.name, [btnOff, btnDel]);
+            actDiv.append(chip);
+          });
+        } else if (cf.estado === 'activas') {
+          actDiv.append(h('small', 'text-secondary', 'Sin elementos activos.'));
+        }
+        box.append(actDiv);
+      }
+
+      // 2. Mostrar categorías deshabilitadas (apartadas)
+      if (cf.estado !== 'activas') {
+        if (deshabilitadas.length) {
+          const desBox = h('div', 'mt-3 pt-2 border-top');
+          desBox.append(h('div', 'small text-secondary fw-semibold mb-2', null, [ic('slash-circle'), ' Deshabilitadas (inactivas):']));
+          const desDiv = h('div', 'd-flex flex-wrap align-items-center gap-2 mb-2');
+
+          deshabilitadas.forEach(c => {
+            // Botón Reactivar
+            const btnOn = h('button', 'btn btn-sm btn-outline-success ms-2 p-0 px-1 border-0', null, [ic('check-circle')]);
+            btnOn.title = 'Reactivar (volverá a estar disponible)';
+            btnOn.onclick = () => seguro(async () => {
+              if (!await confirmar(`¿Reactivar "${c.name}"? Volverá a estar disponible para pedidos y cocina.`)) return;
+              const { error } = await sb.from('categories').update({ active: true }).eq('id', c.id);
+              if (error) throw error;
+              toast('Categoría reactivada');
+            });
+
+            // Botón Eliminar permanente
+            const btnDel = h('button', 'btn btn-sm btn-outline-danger ms-1 p-0 px-1 border-0', null, [ic('trash')]);
+            btnDel.title = 'Eliminar definitivamente';
+            btnDel.onclick = () => seguro(async () => {
+              if (!await confirmar(`¿Eliminar definitivamente "${c.name}"?`)) return;
+              const { error } = await sb.from('categories').delete().eq('id', c.id);
+              if (error) return toast('No se puede eliminar: ya tiene registros en el historial. Mantenla deshabilitada.', false);
+              toast('Eliminado');
+            });
+
+            const chip = h('span', 'd-inline-flex align-items-center chip opacity-75 bg-light-subtle pe-1', null, [
+              h('span', 'text-secondary text-decoration-line-through me-1', c.name),
+              btnOn,
+              btnDel
+            ]);
+            desDiv.append(chip);
+          });
+
+          desBox.append(desDiv);
+          box.append(desBox);
+        } else if (cf.estado === 'deshabilitadas') {
+          box.append(h('small', 'text-secondary', 'No hay elementos deshabilitados en esta sección.'));
+        }
+      }
+
+      // 3. Formulario para agregar nuevo elemento
+      const inp = h('input', 'form-control');
+      inp.maxLength = 50;
+      inp.placeholder = placeholder;
+      inp.value = st.draft[kind] || '';
+      inp.oninput = () => { st.draft[kind] = inp.value; };
+
+      const add = h('button', 'btn btn-acc', null, [ic('plus-lg'), 'Agregar']);
+      add.onclick = () => seguro(async () => {
+        const name = inp.value.trim().replace(/\s+/g, ' ');
+        let value = null;
+        if (!name) return toast('Escribe un nombre.', false);
+        if (kind === 'cantidad') {
+          value = Number(name);
+          if (!Number.isInteger(value) || value < 1 || value > 500) return toast('Escribe un número de 1 a 500.', false);
+        }
+        const existing = byKind(kind, true).find(c => c.name.toLowerCase() === name.toLowerCase());
+        if (existing) {
+          if (existing.active === false) {
+            if (await confirmar(`"${name}" ya existe pero está deshabilitada.\n\n¿Deseas reactivarla?`)) {
+              await sb.from('categories').update({ active: true }).eq('id', existing.id);
+              st.draft[kind] = '';
+              toast('Categoría reactivada');
+            }
+            return;
+          }
+          return toast('Ya existe.', false);
+        }
+        if (!await confirmar(`¿Agregar "${name}"?`)) return;
+        const { error } = await sb.from('categories').insert({ kind, name, value, active: true });
+        if (error) throw error;
+        st.draft[kind] = '';
+        toast('Agregado');
+      });
+
+      box.append(h('div', 'input-group mt-3', null, [inp, add]));
+      sectionsWrap.append(box);
     });
-    box.append(h('div','input-group',null,[inp,add])); wrap.append(box);
-  });
+  };
+
+  qInp.oninput = () => { cf.q = qInp.value; pintar(); };
+  pintar();
   return wrap;
 }
 
