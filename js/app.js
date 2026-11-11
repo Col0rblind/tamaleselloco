@@ -54,6 +54,7 @@ function loginView(msg){
     const {error}=await sb.auth.signInWithPassword({email:u+'@'+APP_CONFIG.EMAIL_DOMAIN,password:pw.value});
     btn.disabled=false;
     if(error){err.textContent='Usuario o contraseña incorrectos.';return;}
+    sb.rpc('log_event',{p_action:'login',p_detail:null}).then(()=>{},()=>{});
     boot();
   });
   forgot.onclick=()=>seguro(async()=>{
@@ -90,17 +91,18 @@ const salsaName = id => (st.cats.find(c=>c.id===id)||{}).name||'?';
 /* ---------- Vistas ---------- */
 function render(){
   app.replaceChildren(); document.body.classList.remove('login-bg');
-  const ALL={cocina:['fire','Cocina'],tamales:['basket3','Tamales'],caja:['cash-coin','Caja'],envios:['truck','Envíos'],apartados:['bookmark-star','Apartados'],clientes:['person-lines-fill','Clientes'],ventas:['receipt','Ventas'],catalogo:['journal-richtext','Catálogo'],cats:['tags','Categorías'],users:['people','Usuarios'],storage:['hdd','Almacenamiento']};
+  const ALL={cocina:['fire','Cocina'],tamales:['basket3','Tamales'],caja:['cash-coin','Caja'],envios:['truck','Envíos'],apartados:['bookmark-star','Apartados'],clientes:['person-lines-fill','Clientes'],ventas:['receipt','Ventas'],catalogo:['journal-richtext','Catálogo'],cats:['tags','Categorías'],users:['people','Usuarios'],storage:['hdd','Almacenamiento'],matriz:['shield-check','Matriz']};
   const allow=isAdmin()?Object.keys(ALL):(({cajero:['caja','envios','apartados','clientes','catalogo'],cocinero:['cocina','tamales','envios'],repartidor:['envios'],general:['cocina','tamales','caja','envios','apartados','clientes','ventas','catalogo']})[st.me.cargo]||['catalogo']);
   if(!allow.includes(st.view)) st.view=allow[0];
   const go=v=>{st.view=v;render();window.scrollTo(0,0);};
-  const logout=async()=>{ if(await confirmar('¿Cerrar sesión?')){ await sb.auth.signOut(); st.me=null; loginView(); } };
+  const logout=async()=>{ if(await confirmar('¿Cerrar sesión?')){ try{ await sb.rpc('log_event',{p_action:'logout',p_detail:null}); }catch(e){}
+    await sb.auth.signOut(); st.me=null; loginView(); } };
   const badgeFor=v=>v==='users'&&st.resets.length?[h('span','badge bg-danger ms-1',String(st.resets.length))]:[];
   const mkTheme=()=>{ const t=h('select','form-select form-select-sm theme-sel');
     [['claro','Claro'],['oscuro','Oscuro'],['muertos','Día de Muertos'],['patrio','Fiestas Patrias'],['navidad','Navidad']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;t.append(o)});
     t.value=document.documentElement.dataset.theme; t.onchange=()=>setTheme(t.value); return t; };
-  const mainKeys=['cocina','tamales','caja','envios','apartados','clientes','ventas','catalogo'].filter(k=>allow.includes(k)), admKeys=['cats','users','storage'].filter(k=>allow.includes(k));
-  const link=(k,cls)=>{const b=h('button',cls+(st.view===k?' on':''),null,[ic(ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.onclick=()=>go(k); return b;};
+  const mainKeys=['cocina','tamales','caja','envios','apartados','clientes','ventas','catalogo'].filter(k=>allow.includes(k)), admKeys=['cats','users','storage','matriz'].filter(k=>allow.includes(k));
+  const link=(k,cls)=>{const b=h('button',cls+(st.view===k?' on':''),null,[ic(ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.title=ALL[k][1]; b.onclick=()=>go(k); return b;};
   const links=mainKeys.map(k=>link(k,'navlink'));
   if(admKeys.length){
     const dd=h('div','dd'), menu=h('div','dd-menu'); admKeys.forEach(k=>menu.append(link(k,'navlink')));
@@ -112,7 +114,7 @@ function render(){
   const top=h('header','topbar no-print',null,[h('div','topbar-in',null,[h('div','brand',null,[h('i','bi bi-fire'),h('span',null,APP_CONFIG.BUSINESS_NAME||'Tamales')]),
     h('span','sect',ALL[st.view][1]),h('nav','topnav',null,links),h('div','topright',null,[mkTheme(),h('span','who d-none d-xl-inline',st.me.full_name),out])])]);
   // Navegación inferior (móvil): 4 principales + "Más"
-  const prio=['caja','envios','apartados','tamales','cocina','ventas','clientes','catalogo','cats','users','storage'].filter(k=>allow.includes(k));
+  const prio=['caja','envios','apartados','tamales','cocina','ventas','clientes','catalogo','cats','users','storage','matriz'].filter(k=>allow.includes(k));
   const prim=prio.length<=5?prio.slice(0,5):prio.slice(0,4), rest=prio.filter(k=>!prim.includes(k));
   const masSheet=()=>{
     const ov=h('div','ov sheet'), bx=h('div','box text-start'), close=()=>ov.remove(); ov.onclick=e=>{if(e.target===ov)close();};
@@ -122,7 +124,7 @@ function render(){
   };
   const items=prim.map(k=>{const b=h('button','bn'+(st.view===k?' on':''),null,[h('i','bi bi-'+ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.onclick=()=>go(k); return b;});
   const mas=h('button','bn'+(rest.includes(st.view)?' on':''),null,[h('i','bi bi-grid'),h('span',null,'Más'),...(rest.includes('users')&&st.resets.length?[h('span','badge bg-danger',String(st.resets.length))]:[])]); mas.onclick=masSheet; items.push(mas);
-  const V={cocina,tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento};
+  const V={cocina,tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento,matriz};
   app.append(top,h('main','container py-3',null,[(V[st.view]||cocina)()]),h('nav','bottom-nav no-print',null,items));
 }
 function setTheme(t){ const r=document.documentElement; r.dataset.theme=t; r.dataset.bsTheme=['oscuro','muertos','navidad'].includes(t)?'dark':'light'; localStorage.setItem('tema',t); }
@@ -244,17 +246,23 @@ function usuarios(){
   const cg=h('select','form-select mb-2'); CARGOS.forEach(([v,l])=>{const o=h('option',null,l);o.value=v;cg.append(o)});
   rl.onchange=()=>{cg.disabled=rl.value==='administrador';};
   const add=h('button','btn btn-acc',null,[ic('person-plus'),'Crear usuario']);
+  const aviso=h('div','small text-danger mt-2');
   add.onclick=()=>seguro(async()=>{
+    aviso.textContent='';
+    const fail=m=>{ aviso.textContent=m; toast(m,false); };
     const u=un.value.trim().toLowerCase(), tel=ph.value.replace(/\D/g,'');
-    if(nm.value.trim().length<2||!/^[a-z0-9._]{3,20}$/.test(u)) return toast('Escribe un nombre y un usuario válido (3 a 20: letras, números, punto o guion bajo).',false);
-    if(!/^[0-9]{10}$/.test(tel)) return toast('El celular debe tener 10 dígitos.',false);
-    const ver=await llamar({action:'version'}).catch(()=>null);
-    if(!ver||ver.version<4) return toast('La función admin-users instalada está desactualizada. Vuelve a desplegar el index.ts nuevo: Edge Functions → admin-users → Code → Deploy updates.',false);
+    if(nm.value.trim().length<2||!/^[a-z0-9._]{3,20}$/.test(u)) return fail('Escribe un nombre y un usuario válido (3 a 20: letras, números, punto o guion bajo).');
+    if(!/^[0-9]{10}$/.test(tel)) return fail('El celular debe tener 10 dígitos.');
+    let ver=null, why='';
+    try{ ver=await llamar({action:'version'}); }catch(e){ why=e.msg||'sin respuesta'; }
+    if(!ver||ver.version<6) return fail(ver?`La función admin-users instalada es la versión ${ver.version} y se necesita la 6. Vuelve a desplegar index.ts.`:`La función admin-users instalada es una versión anterior (respondió: ${why}). Vuelve a desplegar index.ts.`);
     if(!await confirmar(`¿Crear a ${nm.value.trim()} (@${u}) como ${rl.value==='administrador'?'administrador':'empleado ('+cg.value+')'}?`)) return;
-    const r=await llamar({action:'create',full_name:nm.value.trim(),username:u,role:rl.value,cargo:cg.value,phone:tel});
-    await loadAll(); render(); mostrarClave(r.password);
+    try{
+      const r=await llamar({action:'create',full_name:nm.value.trim(),username:u,role:rl.value,cargo:cg.value,phone:tel});
+      await loadAll(); render(); mostrarClave(r.password);
+    }catch(e){ aviso.textContent=e.msg||'No se pudo crear el usuario.'; throw e; }
   });
-  box.append(nm,ug,ph,rl,cg,add); wrap.append(box);
+  box.append(nm,ug,ph,rl,cg,add,aviso); wrap.append(box);
   st.users.forEach(u=>{
     const locked=u.id===st.me.id||(u.role==='master'&&st.me.role!=='master');
     const cl=(CARGOS.find(c=>c[0]===u.cargo)||[])[1]||'';
@@ -285,6 +293,7 @@ function cambiarClaveView(){
     if(a.value!==b.value) return toast('Las contraseñas no coinciden.',false);
     const {error}=await sb.auth.updateUser({password:a.value}); if(error) throw error;
     const r=await sb.rpc('clear_must_change'); if(r.error) throw r.error;
+    sb.rpc('log_event',{p_action:'cambio_clave',p_detail:null}).then(()=>{},()=>{});
     toast('Contraseña actualizada'); boot();
   });
   app.append(h('div','card p-4 mx-auto mt-5',null,[h('h5',null,'Crea tu contraseña nueva'),h('p','small','Es obligatoria antes de continuar.'),A.el,B.el,go]));

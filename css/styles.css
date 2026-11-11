@@ -97,3 +97,39 @@ body.login-bg{background:radial-gradient(circle at 20% 8%,color-mix(in srgb,var(
 .qty{width:84px;flex:none}
 .bar-bg{height:6px;background:var(--soft);border-radius:4px}
 .bar{height:100%;background:var(--acc);border-radius:4px}
+
+/* Responsivo: nada se sale de la pantalla */
+html,body{max-width:100%;overflow-x:hidden}
+img,svg,video{max-width:100%;height:auto}
+.card,.box{max-width:100%;overflow-wrap:anywhere}
+.d-flex>*,.row>*,.input-group>*{min-width:0}
+.form-control,.form-select{max-width:100%}
+.btn{white-space:normal}
+.btn.text-nowrap{white-space:nowrap}
+.ptile{display:flex;gap:.5rem;flex-wrap:wrap;align-items:stretch}
+.ptile>.btn:first-child{flex:1 1 190px}
+.table{font-size:.9rem}
+.table td,.table th{vertical-align:middle}
+@media(max-width:1099.98px){.navlink span{display:none}.navlink{padding:.5rem .6rem}.dd .navlink span{display:none}}
+@media(max-width:575.98px){
+  .card{padding:.85rem!important}
+  .box{padding:1rem}
+  .btn-lg{padding:.6rem .8rem;font-size:1rem}
+  h5{font-size:1.1rem}
+  .table{font-size:.82rem}
+  .qty{width:72px}
+}
+
+/* Calendario de entregas */
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.cal-h{text-align:center;font-size:.75rem;color:var(--muted);padding:.2rem 0}
+.cal-d{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;min-height:68px;padding:4px;text-align:left;display:flex;flex-direction:column;gap:1px}
+.cal-d:hover{background:var(--soft);border-color:var(--acc)}
+.cal-d.otro{opacity:.45}
+.cal-d.hoy{border-color:var(--acc);border-width:2px}
+.cal-d.sel{background:color-mix(in srgb,var(--acc) 14%,var(--card))}
+.cal-d.venc .cal-t{color:#c0392b}
+.cal-n{font-size:.8rem;color:var(--muted)}
+.cal-t{font-weight:700;color:var(--acc);font-size:1rem;line-height:1.1}
+.cal-p{font-size:.68rem;color:var(--muted)}
+@media(max-width:575.98px){.cal-d{min-height:56px;padding:3px}.cal-t{font-size:.85rem}.cal-p{display:none}}
