@@ -234,6 +234,111 @@ function clientes() {
     bs.oninput = pinta; pinta(); box.replaceChildren(top, list);
   });
 }
+function buscarClienteModal(clientes, actualId, onSelect) {
+  const ov = h('div', 'ov'), bx = h('div', 'box text-start p-3');
+  bx.style.maxWidth = '560px';
+
+  const title = h('h5', 'mb-0', 'Seleccionar cliente');
+  const close = h('button', 'btn-close ms-auto');
+  close.onclick = () => ov.remove();
+  const head = h('div', 'd-flex align-items-center justify-content-between mb-3', null, [title, close]);
+
+  const qInp = h('input', 'form-control mb-2');
+  qInp.placeholder = 'Buscar por nombre, celular, colonia o calle...';
+
+  const actRow = h('div', 'd-flex gap-2 mb-2 flex-wrap');
+  const btnSin = h('button', 'btn btn-sm btn-outline-secondary flex-grow-1', null, [ic('dash-circle'), ' Sin cliente (mostrador)']);
+  btnSin.onclick = () => { onSelect('', null); ov.remove(); };
+
+  const btnNuevo = h('button', 'btn btn-sm btn-acc', null, [ic('person-plus'), ' Nuevo cliente']);
+  btnNuevo.onclick = () => seguro(async () => {
+    ov.remove();
+    const nn = await formCliente(null);
+    if (nn) {
+      toast('Cliente guardado');
+      onSelect(String(nn.id), nn);
+    }
+  });
+  actRow.append(btnSin, btnNuevo);
+
+  const colonias = Array.from(new Set(clientes.map(c => (c.colony || '').trim()).filter(Boolean))).sort();
+  let colFiltro = 'todas';
+  const colWrap = h('div', 'd-flex gap-1 flex-wrap mb-2');
+  if (colonias.length > 1) {
+    const chipTodas = h('button', 'chip on py-0 px-2 small', 'Todas');
+    colWrap.append(chipTodas);
+    colonias.slice(0, 7).forEach(col => {
+      const chip = h('button', 'chip py-0 px-2 small', col);
+      chip.onclick = () => {
+        colFiltro = colFiltro === col ? 'todas' : col;
+        colWrap.querySelectorAll('.chip').forEach(c => c.classList.remove('on'));
+        (colFiltro === 'todas' ? chipTodas : chip).classList.add('on');
+        pinta();
+      };
+      colWrap.append(chip);
+    });
+    chipTodas.onclick = () => {
+      colFiltro = 'todas';
+      colWrap.querySelectorAll('.chip').forEach(c => c.classList.remove('on'));
+      chipTodas.classList.add('on');
+      pinta();
+    };
+  }
+
+  const list = h('div', 'd-flex flex-column gap-2');
+  list.style.maxHeight = '50vh';
+  list.style.overflowY = 'auto';
+
+  const pinta = () => {
+    list.replaceChildren();
+    const q = qInp.value.trim().toLowerCase();
+    let rows = clientes;
+    if (colFiltro !== 'todas') {
+      rows = rows.filter(c => (c.colony || '').trim().toLowerCase() === colFiltro.toLowerCase());
+    }
+    if (q) {
+      rows = rows.filter(c =>
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.phone || '').includes(q) ||
+        (c.colony || '').toLowerCase().includes(q) ||
+        (c.street || '').toLowerCase().includes(q) ||
+        (c.address || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (!rows.length) {
+      list.append(h('div', 'text-center text-secondary py-3', 'No se encontraron clientes con esa búsqueda.'));
+      return;
+    }
+
+    rows.forEach(c => {
+      const isSel = String(c.id) === String(actualId);
+      const row = h('button', 'btn btn-outline-secondary text-start p-2 d-flex align-items-center justify-content-between gap-2' + (isSel ? ' border-primary bg-primary bg-opacity-10' : ''));
+      const details = h('div', 'flex-grow-1', null, [
+        h('div', 'fw-bold', c.name),
+        h('div', 'small text-secondary', (c.phone ? `📞 ${c.phone} · ` : '') + dirCliente(c))
+      ]);
+      const badgeSel = isSel
+        ? h('span', 'badge bg-primary ms-2', 'Seleccionado')
+        : h('span', 'badge bg-secondary-subtle text-secondary ms-2', 'Elegir');
+      row.append(details, badgeSel);
+      row.onclick = () => {
+        onSelect(String(c.id), c);
+        ov.remove();
+      };
+      list.append(row);
+    });
+  };
+
+  qInp.oninput = pinta;
+  pinta();
+
+  bx.append(head, qInp, colWrap, actRow, list);
+  ov.append(bx);
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+  document.body.append(ov);
+  setTimeout(() => qInp.focus(), 60);
+}
 async function historial(c, cat) {
   const r = await sb.from('orders').select(ORD).eq('customer_id', c.id).order('created_at', { ascending: false }).limit(100); errDb(r.error);
   const ok = r.data.filter(o => o.status !== 'cancelado'), tot = ok.reduce((a, o) => a + Number(o.total), 0), pg = ok.reduce((a, o) => a + sum(o.payments), 0);
@@ -302,12 +407,49 @@ function caja() {
           h('div', 'd-flex align-items-center gap-2 mt-1 flex-wrap', null, [h('small', 'text-secondary', 'Cant.'), qi, h('small', 'text-secondary', 'Precio'), pi,
             ...(price(p) !== Number(p.price) ? [badge('precio editado', 'info')] : []), rm])]));
       });
-      const cs = h('select', 'form-select'); cs.append(Object.assign(h('option', null, '— Sin cliente (solo si se entrega ahora) —'), { value: '' }));
-      cu.data.forEach(c => cs.append(Object.assign(h('option', null, c.name), { value: String(c.id) }))); cs.value = C.customer; cs.onchange = () => { C.customer = cs.value; };
-      const nc = h('button', 'btn btn-outline-secondary', null, [ic('person-plus')]); nc.title = 'Nuevo cliente';
-      nc.onclick = () => seguro(async () => { const nn = await formCliente(null); if (nn) { C.customer = String(nn.id); toast('Cliente guardado'); render(); } });
+      const cliActual = cu.data.find(c => String(c.id) === String(C.customer));
+      const cliBox = h('div', 'my-2');
+      const abrirSelector = () => buscarClienteModal(cu.data, C.customer, (id, c) => {
+        C.customer = id;
+        draw();
+      });
+
+      if (!cliActual) {
+        const btnBuscar = h('button', 'btn btn-outline-secondary w-100 text-start d-flex align-items-center justify-content-between p-2');
+        btnBuscar.append(
+          h('span', 'text-secondary d-flex align-items-center gap-2', null, [ic('search'), 'Seleccionar cliente (o dejar mostrador)']),
+          h('span', 'badge bg-secondary-subtle text-secondary', 'Opcional')
+        );
+        btnBuscar.onclick = abrirSelector;
+
+        const btnNuevo = h('button', 'btn btn-outline-secondary', null, [ic('person-plus')]);
+        btnNuevo.title = 'Nuevo cliente';
+        btnNuevo.onclick = () => seguro(async () => {
+          const nn = await formCliente(null);
+          if (nn) { C.customer = String(nn.id); toast('Cliente guardado'); render(); }
+        });
+
+        cliBox.append(h('div', 'input-group', null, [btnBuscar, btnNuevo]));
+      } else {
+        const selCard = h('div', 'card p-2 d-flex flex-row align-items-center gap-2 border-primary-subtle bg-primary bg-opacity-10');
+        const info = h('div', 'flex-grow-1 text-truncate', null, [
+          h('div', 'fw-bold text-truncate', [ic('person-fill'), ' ' + cliActual.name]),
+          h('div', 'small text-secondary text-truncate', `${cliActual.phone || 'Sin cel'} · ${dirCliente(cliActual)}`)
+        ]);
+        const btnCambiar = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('search')]);
+        btnCambiar.title = 'Cambiar cliente';
+        btnCambiar.onclick = abrirSelector;
+
+        const btnQuitar = h('button', 'btn btn-sm btn-outline-danger', null, [ic('x-lg')]);
+        btnQuitar.title = 'Quitar cliente (dejar sin cliente)';
+        btnQuitar.onclick = () => { C.customer = ''; draw(); };
+
+        selCard.append(info, btnCambiar, btnQuitar);
+        cliBox.append(selCard);
+      }
+
       const note = h('input', 'form-control mb-2'); note.placeholder = 'Nota (opcional)'; note.maxLength = 200; note.value = C.note; note.oninput = () => { C.note = note.value; };
-      cart.append(h('div', 'input-group my-2', null, [cs, nc]), note);
+      cart.append(cliBox, note);
 
       const defs = ESTADOS.mostrador, hint = h('div', 'small fw-semibold mt-1'), chg = h('div', 'fs-5 mt-1');
       const entregaYa = () => (defs.find(x => x[0] === C.estado) || [])[2] === 1;

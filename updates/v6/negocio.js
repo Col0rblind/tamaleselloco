@@ -5,7 +5,7 @@ const $$ = n => Number(n || 0).toLocaleString('es-MX', { style: 'currency', curr
 const fdt = d => new Date(d).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 const sum = a => (a || []).reduce((x, y) => x + Number(y.amount), 0);
 const r2 = n => Math.round(n * 100) / 100;
-const KIND = { mostrador: 'Mostrador', envio: 'Envío', apartado: 'Apartado' };
+const KIND = { mostrador: 'Sucursal', envio: 'Domicilio', apartado: 'Apartado' };
 const DL = { por_enviar: 'Por enviar', en_camino: 'En camino', entregado: 'Entregado' };
 const METODOS = [['efectivo', 'Efectivo'], ['transferencia', 'Transferencia'], ['tarjeta', 'Tarjeta']];
 const CARGOS = [['cajero', 'Cajero'], ['repartidor', 'Repartidor'], ['cocinero', 'Cocinero'], ['general', 'Otro / general']];
@@ -13,7 +13,7 @@ const safe = s => /^[=+\-@]/.test(String(s)) ? "'" + s : String(s);
 const badge = (t, c) => h('span', 'badge bg-' + c + ' me-1', t);
 const canCash = () => isAdmin() || ['cajero', 'general'].includes(st.me.cargo);
 const canKitchen = () => isAdmin() || ['cocinero', 'general'].includes(st.me.cargo);
-const newCart = () => ({ items: {}, prices: {}, kind: 'mostrador', customer: '', note: '', pago: newPago(), fecha: '', estado: '', editing: null, back: 'caja' });
+const newCart = () => ({ items: {}, prices: {}, kind: 'mostrador', customer: '', note: '', pago: newPago(), fecha: '', estado: '', entrega: '', editing: null, back: 'caja' });
 const bad = m => { const e = new Error(m); e.msg = m; return e; };
 const ORD = 'id,total,status,kind,delivery,delivery_date,note,created_at,customer_id,stock_debited,created_by,assigned_to,delivered_by,customers(name,phone,colony,street,street_number,address),payments(id,amount,method,tendered,created_at,created_by),order_items(qty,unit_price,product_id)';
 
@@ -148,30 +148,36 @@ function verDetalle(o, cat) {
 function editar(o) {
   const items = {}, prices = {};
   (o.order_items || []).forEach(i => { items[i.product_id] = (items[i.product_id] || 0) + i.qty; prices[i.product_id] = Number(i.unit_price); });
-  st.cart = { ...newCart(), items, prices, kind: o.kind, customer: o.customer_id ? String(o.customer_id) : '', note: o.note || '', fecha: o.delivery_date || '', editing: o.id, back: st.view };
+  st.cart = { ...newCart(), items, prices, kind: o.kind, customer: o.customer_id ? String(o.customer_id) : '', note: o.note || '', fecha: o.delivery_date || '',
+    entrega: o.kind === 'envio' ? 'domicilio' : 'sucursal', editing: o.id, back: st.view };
   st.view = 'caja'; render();
 }
 function acciones(row, o, cat, saldo) {
-  const adm = isAdmin(), cg = st.me.cargo, cash = canCash(), repar = cg === 'repartidor', cook = cg === 'cocinero', mio = o.assigned_to === st.me.id;
-  const pagado = saldo <= 0.001, enCamino = o.kind === 'envio' && o.delivery === 'en_camino', abierto = ['pendiente', 'listo'].includes(o.status);
+  const adm = isAdmin(), cg = st.me.cargo, cash = canCash(), repar = cg === 'repartidor', mio = o.assigned_to === st.me.id;
+  const pagado = saldo <= 0.001, abierto = ['pendiente', 'listo'].includes(o.status), domicilio = o.kind === 'envio', enCamino = domicilio && o.delivery === 'en_camino';
   const mk = (txt, icon, fn, cls = 'btn-outline-secondary') => { const b = h('button', 'btn btn-sm ' + cls, null, [ic(icon), txt]); b.onclick = () => seguro(fn); row.append(b); };
   const set = async (status, delivery, msg, aviso) => {
     if (!await confirmar(msg)) return;
     await rpc('set_order_status', { p_order: o.id, p_status: status, p_delivery: delivery }); toast('Actualizado'); render(); if (aviso) avisar(await cargarPedido(o.id), aviso, cat);
   };
   mk('Detalle', 'list-ul', () => verDetalle(o, cat));
-  if (saldo > 0.001 && abierto && (cash || (repar && mio))) mk(enCamino ? 'Cobrar' : 'Abonar', 'cash-coin', () => abonar(o, saldo, false, cat), 'btn-acc');
-  if (o.status === 'pendiente' && (adm || cash || cook)) mk('Marcar listo', 'check2', () => set('listo', null, `¿El pedido #${o.id} está listo? Se descontarán los tamales del inventario.`, o.customer_id ? 'listo' : null));
-  if (abierto && (adm || cash)) mk(o.assigned_to ? 'Reasignar' : 'Asignar repartidor', 'person-badge', () => asignar(o));
-  if (abierto && pagado && o.customer_id && !enCamino && (adm || cash || (repar && mio && o.status === 'listo')))
-    mk('Salió a reparto', 'truck', () => set(o.status === 'pendiente' ? 'listo' : o.status, 'en_camino', `¿El pedido #${o.id} salió a reparto?`, 'camino'));
+  if (saldo > 0.001 && abierto && (cash || (repar && mio))) mk(enCamino ? 'Cobrar en domicilio' : 'Abonar', 'cash-coin', () => abonar(o, saldo, false, cat), 'btn-acc');
+  if (o.status === 'pendiente' && (adm || cash)) mk('Marcar listo', 'check2', () => set('listo', null, `¿El pedido #${o.id} está listo? Se descontarán los tamales del inventario.`, o.customer_id ? 'listo' : null));
+  if (domicilio && abierto && (adm || cash)) mk(o.assigned_to ? 'Cambiar repartidor' : 'Asignar repartidor', 'person-badge', () => asignar(o));
+  // Nada sale a reparto sin repartidor: si no hay uno asignado, se elige en ese momento
+  if (domicilio && abierto && o.delivery === 'por_enviar' && (adm || cash || (repar && mio && o.status === 'listo')))
+    mk('Salió a reparto', 'truck', async () => {
+      if (!o.assigned_to) { const u = await elegirRepartidor(o); if (!u) return; await rpc('assign_order', { p_order: o.id, p_user: u }); }
+      await set(o.status === 'pendiente' ? 'listo' : o.status, 'en_camino', `¿El pedido #${o.id} salió a reparto?`, 'camino');
+    });
+  // El repartidor registra el dinero que recibe en el domicilio antes de entregar
   if (enCamino && abierto && (adm || cash || (repar && mio)))
     mk(saldo > 0.001 ? 'Cobrar y entregar' : 'Entregado', 'box-seam', async () => {
       if (saldo > 0.001) { const ap = await abonar(o, saldo, true, cat); if (ap === null) return; if (ap < saldo - 0.001) { toast('Aún queda saldo por cobrar.', false); render(); return; } }
       await set('entregado', null, `¿Confirmas que el pedido #${o.id} fue entregado?`, 'entregado');
     }, 'btn-acc');
-  if (!enCamino && abierto && pagado && (adm || cash))
-    mk('Entregar en mostrador', 'shop', () => set('entregado', null, `¿Entregar el pedido #${o.id} al cliente en mostrador?`, o.customer_id ? 'entregado' : null));
+  if (!domicilio && abierto && pagado && (adm || cash))
+    mk('Entregar en sucursal', 'shop', () => set('entregado', null, `¿Entregar el pedido #${o.id} al cliente en sucursal?`, o.customer_id ? 'entregado' : null), 'btn-acc');
   if (o.status === 'listo' && (adm || cash)) mk('Regresar a pendiente', 'arrow-counterclockwise', () => set('pendiente', null, '¿Regresar a pendiente? Los tamales vuelven al inventario.', null));
   if (o.status === 'pendiente' && cash) mk('Editar', 'pencil', () => editar(o));
   mk('Ticket', 'receipt', () => verTicket(o, cat));
@@ -180,6 +186,7 @@ function pedidoCard(o, cat) {
   const pg = sum(o.payments), saldo = r2(Number(o.total) - pg), [t, col] = etiqueta(o), cu = o.customers, c = h('div', 'card p-3 mb-2');
   c.append(h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${cu ? cu.name : 'Mostrador'}`), h('strong', null, $$(o.total))]),
     h('div', 'my-1', null, [badge(t, col), badge(KIND[o.kind], 'dark'), ...(o.status === 'listo' ? [badge('Listo', 'info')] : []), ...(o.delivery && o.status !== 'entregado' ? [badge(DL[o.delivery], 'primary')] : []),
+      ...(o.kind === 'envio' && !o.assigned_to && ['pendiente', 'listo'].includes(o.status) ? [badge('Sin repartidor', 'warning')] : []),
       ...(o.delivery_date ? [badge('Entrega: ' + fechaCorta(o.delivery_date), o.delivery_date < hoyStr() && ['pendiente', 'listo'].includes(o.status) ? 'danger' : 'dark')] : [])]));
   lineas(o, cat).forEach(l => c.append(h('div', 'small', l.txt + (l.sub ? ` (${l.sub})` : ''))));
   if (o.kind !== 'mostrador' && cu) c.append(h('div', 'small text-secondary mt-1', null, [ic('geo-alt'), dirCliente(cu) + ' · ', ic('telephone'), cu.phone || 'sin celular']));
@@ -227,6 +234,111 @@ function clientes() {
     bs.oninput = pinta; pinta(); box.replaceChildren(top, list);
   });
 }
+function buscarClienteModal(clientes, actualId, onSelect) {
+  const ov = h('div', 'ov'), bx = h('div', 'box text-start p-3');
+  bx.style.maxWidth = '560px';
+
+  const title = h('h5', 'mb-0', 'Seleccionar cliente');
+  const close = h('button', 'btn-close ms-auto');
+  close.onclick = () => ov.remove();
+  const head = h('div', 'd-flex align-items-center justify-content-between mb-3', null, [title, close]);
+
+  const qInp = h('input', 'form-control mb-2');
+  qInp.placeholder = 'Buscar por nombre, celular, colonia o calle...';
+
+  const actRow = h('div', 'd-flex gap-2 mb-2 flex-wrap');
+  const btnSin = h('button', 'btn btn-sm btn-outline-secondary flex-grow-1', null, [ic('dash-circle'), ' Sin cliente (mostrador)']);
+  btnSin.onclick = () => { onSelect('', null); ov.remove(); };
+
+  const btnNuevo = h('button', 'btn btn-sm btn-acc', null, [ic('person-plus'), ' Nuevo cliente']);
+  btnNuevo.onclick = () => seguro(async () => {
+    ov.remove();
+    const nn = await formCliente(null);
+    if (nn) {
+      toast('Cliente guardado');
+      onSelect(String(nn.id), nn);
+    }
+  });
+  actRow.append(btnSin, btnNuevo);
+
+  const colonias = Array.from(new Set(clientes.map(c => (c.colony || '').trim()).filter(Boolean))).sort();
+  let colFiltro = 'todas';
+  const colWrap = h('div', 'd-flex gap-1 flex-wrap mb-2');
+  if (colonias.length > 1) {
+    const chipTodas = h('button', 'chip on py-0 px-2 small', 'Todas');
+    colWrap.append(chipTodas);
+    colonias.slice(0, 7).forEach(col => {
+      const chip = h('button', 'chip py-0 px-2 small', col);
+      chip.onclick = () => {
+        colFiltro = colFiltro === col ? 'todas' : col;
+        colWrap.querySelectorAll('.chip').forEach(c => c.classList.remove('on'));
+        (colFiltro === 'todas' ? chipTodas : chip).classList.add('on');
+        pinta();
+      };
+      colWrap.append(chip);
+    });
+    chipTodas.onclick = () => {
+      colFiltro = 'todas';
+      colWrap.querySelectorAll('.chip').forEach(c => c.classList.remove('on'));
+      chipTodas.classList.add('on');
+      pinta();
+    };
+  }
+
+  const list = h('div', 'd-flex flex-column gap-2');
+  list.style.maxHeight = '50vh';
+  list.style.overflowY = 'auto';
+
+  const pinta = () => {
+    list.replaceChildren();
+    const q = qInp.value.trim().toLowerCase();
+    let rows = clientes;
+    if (colFiltro !== 'todas') {
+      rows = rows.filter(c => (c.colony || '').trim().toLowerCase() === colFiltro.toLowerCase());
+    }
+    if (q) {
+      rows = rows.filter(c =>
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.phone || '').includes(q) ||
+        (c.colony || '').toLowerCase().includes(q) ||
+        (c.street || '').toLowerCase().includes(q) ||
+        (c.address || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (!rows.length) {
+      list.append(h('div', 'text-center text-secondary py-3', 'No se encontraron clientes con esa búsqueda.'));
+      return;
+    }
+
+    rows.forEach(c => {
+      const isSel = String(c.id) === String(actualId);
+      const row = h('button', 'btn btn-outline-secondary text-start p-2 d-flex align-items-center justify-content-between gap-2' + (isSel ? ' border-primary bg-primary bg-opacity-10' : ''));
+      const details = h('div', 'flex-grow-1', null, [
+        h('div', 'fw-bold', c.name),
+        h('div', 'small text-secondary', (c.phone ? `📞 ${c.phone} · ` : '') + dirCliente(c))
+      ]);
+      const badgeSel = isSel
+        ? h('span', 'badge bg-primary ms-2', 'Seleccionado')
+        : h('span', 'badge bg-secondary-subtle text-secondary ms-2', 'Elegir');
+      row.append(details, badgeSel);
+      row.onclick = () => {
+        onSelect(String(c.id), c);
+        ov.remove();
+      };
+      list.append(row);
+    });
+  };
+
+  qInp.oninput = pinta;
+  pinta();
+
+  bx.append(head, qInp, colWrap, actRow, list);
+  ov.append(bx);
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+  document.body.append(ov);
+  setTimeout(() => qInp.focus(), 60);
+}
 async function historial(c, cat) {
   const r = await sb.from('orders').select(ORD).eq('customer_id', c.id).order('created_at', { ascending: false }).limit(100); errDb(r.error);
   const ok = r.data.filter(o => o.status !== 'cancelado'), tot = ok.reduce((a, o) => a + Number(o.total), 0), pg = ok.reduce((a, o) => a + sum(o.payments), 0);
@@ -244,8 +356,8 @@ async function historial(c, cat) {
 /* ---------- Caja ---------- */
 function caja() {
   return lazy(async box => {
-    const [cat, cu, lc] = await Promise.all([getCat(), sb.from('customers').select('id,name').order('name').limit(500),
-      sb.from('cash_closures').select('*').order('to_ts', { ascending: false }).limit(5)]);
+    const [cat, cu, lc, bus] = await Promise.all([getCat(), sb.from('customers').select('id,name,colony,street,street_number,address').order('name').limit(500),
+      sb.from('cash_closures').select('*').order('to_ts', { ascending: false }).limit(5), buscarPedidos(st.draft.pq || '')]);
     for (const r of [cu, lc]) if (r.error) throw r.error;
     const from = lc.data[0] ? lc.data[0].to_ts : '2000-01-01T00:00:00Z';
     const py = await sb.from('payments').select('amount,method,orders(status)').gt('created_at', from).limit(2000); if (py.error) throw py.error;
@@ -253,6 +365,14 @@ function caja() {
     const prods = cat.list.filter(p => p.active || C.items[p.id]), price = p => C.prices[p.id] != null ? C.prices[p.id] : Number(p.price);
     const numIn = (val, min, max, step) => { const i = h('input', 'form-control form-control-sm qty'); i.type = 'number'; i.min = min; i.max = max; i.step = step; i.inputMode = step === 1 ? 'numeric' : 'decimal'; i.value = val; return i; };
 
+    const buscador = () => {
+      const c = h('div', 'card p-3 mb-3'), bi = h('input', 'form-control'); bi.placeholder = 'Buscar pedido: # de pedido, nombre o celular del cliente'; bi.maxLength = 60; bi.value = st.draft.pq || '';
+      const go = h('button', 'btn btn-acc', null, [ic('search'), 'Buscar']), lim = h('button', 'btn btn-outline-secondary', null, [ic('x-lg')]); lim.title = 'Limpiar';
+      const buscar = () => { st.draft.pq = bi.value.trim(); render(); }; go.onclick = buscar; bi.onkeydown = e => { if (e.key === 'Enter') buscar(); }; lim.onclick = () => { st.draft.pq = ''; render(); };
+      c.append(h('div', 'd-flex gap-2', null, [bi, go, ...(st.draft.pq ? [lim] : [])]));
+      if (st.draft.pq) { c.append(h('div', 'small text-secondary mt-2', `${bus.length} resultado(s) para "${st.draft.pq}"`)); if (!bus.length) c.append(h('div', 'small text-secondary', 'No se encontró ningún pedido.')); bus.forEach(o => c.append(h('div', 'mt-2', null, [pedidoCard(o, cat)]))); }
+      return c;
+    };
     const draw = () => {
       const items = prods.filter(p => C.items[p.id]), total = r2(items.reduce((a, p) => a + price(p) * C.items[p.id], 0));
       const left = h('div', 'col-lg-6'), right = h('div', 'col-lg-6');
@@ -287,12 +407,49 @@ function caja() {
           h('div', 'd-flex align-items-center gap-2 mt-1 flex-wrap', null, [h('small', 'text-secondary', 'Cant.'), qi, h('small', 'text-secondary', 'Precio'), pi,
             ...(price(p) !== Number(p.price) ? [badge('precio editado', 'info')] : []), rm])]));
       });
-      const cs = h('select', 'form-select'); cs.append(Object.assign(h('option', null, '— Sin cliente (solo si se entrega ahora) —'), { value: '' }));
-      cu.data.forEach(c => cs.append(Object.assign(h('option', null, c.name), { value: String(c.id) }))); cs.value = C.customer; cs.onchange = () => { C.customer = cs.value; };
-      const nc = h('button', 'btn btn-outline-secondary', null, [ic('person-plus')]); nc.title = 'Nuevo cliente';
-      nc.onclick = () => seguro(async () => { const nn = await formCliente(null); if (nn) { C.customer = String(nn.id); toast('Cliente guardado'); render(); } });
+      const cliActual = cu.data.find(c => String(c.id) === String(C.customer));
+      const cliBox = h('div', 'my-2');
+      const abrirSelector = () => buscarClienteModal(cu.data, C.customer, (id, c) => {
+        C.customer = id;
+        draw();
+      });
+
+      if (!cliActual) {
+        const btnBuscar = h('button', 'btn btn-outline-secondary w-100 text-start d-flex align-items-center justify-content-between p-2');
+        btnBuscar.append(
+          h('span', 'text-secondary d-flex align-items-center gap-2', null, [ic('search'), 'Seleccionar cliente (o dejar mostrador)']),
+          h('span', 'badge bg-secondary-subtle text-secondary', 'Opcional')
+        );
+        btnBuscar.onclick = abrirSelector;
+
+        const btnNuevo = h('button', 'btn btn-outline-secondary', null, [ic('person-plus')]);
+        btnNuevo.title = 'Nuevo cliente';
+        btnNuevo.onclick = () => seguro(async () => {
+          const nn = await formCliente(null);
+          if (nn) { C.customer = String(nn.id); toast('Cliente guardado'); render(); }
+        });
+
+        cliBox.append(h('div', 'input-group', null, [btnBuscar, btnNuevo]));
+      } else {
+        const selCard = h('div', 'card p-2 d-flex flex-row align-items-center gap-2 border-primary-subtle bg-primary bg-opacity-10');
+        const info = h('div', 'flex-grow-1 text-truncate', null, [
+          h('div', 'fw-bold text-truncate', [ic('person-fill'), ' ' + cliActual.name]),
+          h('div', 'small text-secondary text-truncate', `${cliActual.phone || 'Sin cel'} · ${dirCliente(cliActual)}`)
+        ]);
+        const btnCambiar = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('search')]);
+        btnCambiar.title = 'Cambiar cliente';
+        btnCambiar.onclick = abrirSelector;
+
+        const btnQuitar = h('button', 'btn btn-sm btn-outline-danger', null, [ic('x-lg')]);
+        btnQuitar.title = 'Quitar cliente (dejar sin cliente)';
+        btnQuitar.onclick = () => { C.customer = ''; draw(); };
+
+        selCard.append(info, btnCambiar, btnQuitar);
+        cliBox.append(selCard);
+      }
+
       const note = h('input', 'form-control mb-2'); note.placeholder = 'Nota (opcional)'; note.maxLength = 200; note.value = C.note; note.oninput = () => { C.note = note.value; };
-      cart.append(h('div', 'input-group my-2', null, [cs, nc]), note);
+      cart.append(cliBox, note);
 
       const defs = ESTADOS.mostrador, hint = h('div', 'small fw-semibold mt-1'), chg = h('div', 'fs-5 mt-1');
       const entregaYa = () => (defs.find(x => x[0] === C.estado) || [])[2] === 1;
@@ -308,8 +465,13 @@ function caja() {
         cart.append(es, pagoUI(C.pago, upd), chg, hint);
       }
       if (C.editing || (C.estado && !entregaYa())) {
+        const en = h('select', 'form-select mb-1'); en.append(Object.assign(h('option', null, '— ¿Dónde se entrega? —'), { value: '' }));
+        [['sucursal', 'En sucursal (queda en Apartados)'], ['domicilio', 'A domicilio (va a Envíos)']].forEach(([v, l]) => en.append(Object.assign(h('option', null, l), { value: v }))); en.value = C.entrega; en.onchange = () => { C.entrega = en.value; draw(); };
+        const pagoOk = calcPago(pagosDe(C.pago), total).ap >= total && total > 0;
+        cart.append(h('label', 'small text-secondary mt-2', 'Entrega'), en, ...(C.entrega ? [h('div', 'small text-secondary mb-1', C.entrega === 'sucursal' ? 'Pasará a Apartados hasta entregarlo en sucursal.' :
+          (pagoOk || C.editing ? 'Pasará a Envíos, en espera de asignar repartidor.' : 'Con saldo pendiente: estará en Apartados hasta que esté listo; después pasa a Envíos y el repartidor cobra en el domicilio.'))] : []));
         const fd = h('input', 'form-control mb-2'); fd.type = 'date'; fd.min = hoyStr(); fd.value = C.fecha; fd.onchange = () => { C.fecha = fd.value; };
-        cart.append(h('label', 'small text-secondary mt-2', 'Fecha de entrega'), fd);
+        cart.append(h('label', 'small text-secondary mt-1', 'Fecha de entrega'), fd);
       }
       upd();
       const payload = () => items.map(p => ({ product_id: p.id, qty: C.items[p.id], price: price(p) }));
@@ -318,19 +480,25 @@ function caja() {
         if (!items.length) return toast('Agrega al menos un producto.', false);
         if (C.editing) {
           if (!C.customer) return toast('Los pedidos por entregar necesitan cliente.', false);
+          if (!C.entrega) return toast('Elige si se entrega en sucursal o a domicilio.', false);
+          const kindE = C.entrega === 'domicilio' ? 'envio' : (C.kind === 'envio' ? 'mostrador' : C.kind), cliE = cu.data.find(x => String(x.id) === C.customer);
+          if (kindE === 'envio' && !(cliE && ((cliE.street && cliE.colony && cliE.street_number) || cliE.address))) return toast('El cliente no tiene dirección completa. Edítalo en Clientes.', false);
           if (!await confirmar(`¿Guardar los cambios del pedido #${C.editing}?`)) return;
-          await rpc('update_order', { p_order: C.editing, p_customer: Number(C.customer), p_kind: C.kind, p_note: C.note || null, p_items: payload(), p_delivery_date: C.fecha || null });
+          await rpc('update_order', { p_order: C.editing, p_customer: Number(C.customer), p_kind: kindE, p_note: C.note || null, p_items: payload(), p_delivery_date: C.fecha || null });
           const b = C.back; st.cart = newCart(); st.view = b || 'caja'; toast('Pedido actualizado'); render(); return;
         }
         const d = defs.find(x => x[0] === C.estado); if (!d) return toast('Elige el estado de la venta.', false);
         const ya = d[2] === 1;
         if (!ya && !C.customer) return toast('Los pedidos por entregar necesitan cliente.', false);
+        if (!ya && !C.entrega) return toast('Elige si se entrega en sucursal o a domicilio.', false);
+        const cli = cu.data.find(x => String(x.id) === C.customer);
+        if (!ya && C.entrega === 'domicilio' && !(cli && ((cli.street && cli.colony && cli.street_number) || cli.address))) return toast('El cliente no tiene dirección completa (colonia, calle y número). Edítalo en Clientes.', false);
         if (!ya && !C.fecha) return toast('Elige la fecha de entrega.', false);
         if (!ya && C.fecha < hoyStr()) return toast('La fecha de entrega no puede ser anterior a hoy.', false);
         const pays = pagosDe(C.pago), c = calcPago(pays, total); if (c.error) return toast(c.error, false);
         const er = validaEstado(d[1], c.ap, total); if (er) return toast(er, false);
-        if (!await confirmar(`¿Guardar como ${C.estado} por ${$$(total)}${c.ap ? ' con pago de ' + $$(c.ap) : ''}${ya ? '' : ' para entregar el ' + C.fecha}?`)) return;
-        const oid = await rpc('create_order', { p_customer: C.customer ? Number(C.customer) : null, p_kind: 'mostrador', p_note: C.note || null, p_items: payload(), p_pays: pays, p_deliver: ya, p_delivery_date: ya ? null : C.fecha });
+        if (!await confirmar(`¿Guardar como ${C.estado} por ${$$(total)}${c.ap ? ' con pago de ' + $$(c.ap) : ''}${ya ? '' : ' ' + (ya ? '' : (C.entrega === 'domicilio' ? ' a domicilio' : ' en sucursal')) + (ya ? '' : ' el ' + C.fecha)}?`)) return;
+        const oid = await rpc('create_order', { p_customer: C.customer ? Number(C.customer) : null, p_kind: !ya && C.entrega === 'domicilio' ? 'envio' : 'mostrador', p_note: C.note || null, p_items: payload(), p_pays: pays, p_deliver: ya, p_delivery_date: ya ? null : C.fecha });
         st.cart = newCart(); render(); verTicket(await cargarPedido(oid), cat, 'nuevo');
         if (c.cambio > 0) msgModal('Cambio a entregar', $$(c.cambio), `Recibido ${$$(c.recibido)} · Cuenta ${$$(total)}`);
       });
@@ -349,7 +517,7 @@ function caja() {
           row.append(d); }
         ct.append(row);
       });
-      box.replaceChildren(h('div', 'row g-3', null, [left, right]), ct);
+      box.replaceChildren(buscador(), h('div', 'row g-3', null, [left, right]), ct);
     };
     draw();
   });
@@ -377,7 +545,7 @@ function ventasLista() {
     const allc = h('button', 'chip' + (F.all ? ' on' : ''), 'Todas las fechas'); allc.onclick = () => { F.all = !F.all; render(); }; fechas.append(allc);
     const filtros = h('div', 'd-flex flex-wrap gap-2 align-items-center mb-3', null, [
       sel([['todos', 'Todos los estados'], ['pendientes', 'Pendientes (cobrar o entregar)'], ['cobrar', 'Por cobrar'], ['entregar', 'Por entregar'], ['cerrados', 'Pagados y entregados'], ['cancelados', 'Cancelados']], F.est, v => { F.est = v; }),
-      sel([['', 'Todos los tipos'], ['mostrador', 'Mostrador'], ['envio', 'Envío'], ['apartado', 'Apartado']], F.tipo, v => { F.tipo = v; }),
+      sel([['', 'Todos los tipos'], ['mostrador', 'Sucursal'], ['envio', 'Domicilio'], ['apartado', 'Apartado']], F.tipo, v => { F.tipo = v; }),
       sel([['', 'Registró: todos'], ...todos.map(x => [x.id, x.full_name])], F.reg, v => { F.reg = v; }),
       sel([['', 'Repartidor: todos'], ['none', 'Sin asignar'], ...reps.map(x => [x.id, x.full_name])], F.rep, v => { F.rep = v; })]);
 
@@ -699,14 +867,14 @@ function barras(titulo, filas, fmt = String, max = 8) {
   });
   return card;
 }
-async function asignar(o) {
+async function elegirRepartidor(o) {
   const reps = staffArr().filter(x => x.cargo === 'repartidor' && x.active);
-  if (!reps.length) return toast('No hay repartidores activos. Crea un usuario con cargo Repartidor.', false);
-  const f = await formModal(`Asignar pedido #${o.id}`, [{ key: 'u', label: 'Repartidor', options: [['', '— Sin asignar —'], ...reps.map(x => [x.id, x.full_name])], value: o.assigned_to || '' }], 'Asignar');
-  if (!f) return;
-  if (!await confirmar(f.u ? `¿Asignar el pedido #${o.id} a ${staffName(f.u)}?` : `¿Quitar la asignación del pedido #${o.id}?`)) return;
-  await rpc('assign_order', { p_order: o.id, p_user: f.u || null }); toast('Asignado'); render();
+  if (!reps.length) { toast('No hay repartidores activos. Crea un usuario con cargo Repartidor.', false); return null; }
+  if (reps.length === 1) return (await confirmar(`¿Asignar el pedido #${o.id} a ${reps[0].full_name}?`)) ? reps[0].id : null;
+  const f = await formModal(`¿Quién reparte el pedido #${o.id}?`, [{ key: 'u', label: 'Repartidor', options: [['', '— Elige un repartidor —'], ...reps.map(x => [x.id, x.full_name])], value: o.assigned_to || '' }], 'Asignar');
+  if (!f) return null; if (!f.u) { toast('Elige un repartidor.', false); return null; } return f.u;
 }
+async function asignar(o) { const u = await elegirRepartidor(o); if (!u) return; await rpc('assign_order', { p_order: o.id, p_user: u }); toast('Repartidor asignado'); render(); }
 
 /* ---------- Excel, bitácora y exportar antes de borrar ---------- */
 const logEv = (a, d) => sb.rpc('log_event', { p_action: a, p_detail: d }).then(() => {}, () => {});
@@ -789,9 +957,44 @@ function listaPedidos(titulo, vacio, filtro, conRepartidor) {
     data.forEach(o => box.append(pedidoCard(o, cat)));
   });
 }
-// Pagados y sin entregar -> Envíos (para dar seguimiento al reparto). Con saldo -> Apartados.
-const envios = () => listaPedidos('Envíos: pagados por entregar', 'No hay pedidos pagados por entregar.', o => o.kind === 'envio' || saldoDe(o) <= 0.001, true);
-const apartados = () => listaPedidos('Apartados: con saldo por cobrar', 'No hay apartados con saldo pendiente.', o => o.kind !== 'envio' && saldoDe(o) > 0.001, false);
+// A domicilio -> Envíos cuando ya está pagado, está listo o ya va en camino. Todo lo demás (sucursal o con saldo sin terminar) -> Apartados.
+const abierto = o => ['pendiente', 'listo'].includes(o.status);
+const enEnvios = o => abierto(o) && o.kind === 'envio' && (saldoDe(o) <= 0.001 || o.status === 'listo' || o.delivery === 'en_camino');
+const enApartados = o => abierto(o) && !enEnvios(o);
+const envios = () => listaPedidos('Envíos a domicilio', 'No hay envíos por atender.', enEnvios, true);
+function apartados() {
+  return lazy(async box => {
+    const [cat, r] = await Promise.all([getCat(), sb.from('orders').select(ORD).in('status', ['pendiente', 'listo']).order('delivery_date', { ascending: true, nullsFirst: false }).order('created_at').limit(300)]);
+    if (r.error) throw r.error;
+    const A = st.af || (st.af = { q: '', pago: '', est: '', ent: '', fecha: '' }), base = r.data.filter(enApartados), hoy = hoyStr();
+    const qin = h('input', 'form-control'); qin.placeholder = 'Buscar por # de pedido, cliente o celular…'; qin.maxLength = 60; qin.value = A.q;
+    const lista = h('div'), cnt = h('p', 'small text-secondary');
+    const sel = (opts, key) => { const s = h('select', 'form-select form-select-sm w-auto'); opts.forEach(([v, l]) => s.append(Object.assign(h('option', null, l), { value: v }))); s.value = A[key]; s.onchange = () => { A[key] = s.value; if (key === 'ent') { A.fecha = ''; fd.value = ''; } pinta(); }; return s; };
+    const fd = h('input', 'form-control form-control-sm w-auto'); fd.type = 'date'; fd.value = A.fecha; fd.title = 'Fecha de entrega exacta'; fd.onchange = () => { A.fecha = fd.value; if (A.fecha) { A.ent = ''; render(); return; } pinta(); };
+    const limpiar = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('x-lg'), 'Limpiar']); limpiar.onclick = () => { st.af = null; render(); };
+    const filtros = h('div', 'd-flex flex-wrap gap-2 align-items-center mb-3', null, [
+      sel([['', 'Pago: todos'], ['cobrar', 'Sin pago (X COBRAR)'], ['abonado', 'Abonado'], ['pagado', 'Pagado']], 'pago'), sel([['', 'Estado: todos'], ['pendiente', 'Pendiente'], ['listo', 'Listo']], 'est'),
+      sel([['', 'Entrega: cualquier fecha'], ['hoy', 'Hoy'], ['vencidos', 'Vencidos'], ['semana', 'Próximos 7 días'], ['sin', 'Sin fecha']], 'ent'), fd, limpiar]);
+    const pinta = () => {
+      A.q = qin.value; const t = A.q.trim().toLowerCase().replace(/^#/, '');
+      const data = base.filter(o => {
+        const pg = sum(o.payments), cu = o.customers || {}, d = o.delivery_date;
+        if (t && !(String(o.id) === t || String(cu.name || '').toLowerCase().includes(t) || String(cu.phone || '').includes(t))) return false;
+        if (A.pago === 'cobrar' && pg > 0) return false; if (A.pago === 'abonado' && !(pg > 0 && saldoDe(o) > 0.001)) return false; if (A.pago === 'pagado' && saldoDe(o) > 0.001) return false;
+        if (A.est && o.status !== A.est) return false;
+        if (A.ent === 'hoy' && d !== hoy) return false; if (A.ent === 'vencidos' && !(d && d < hoy)) return false;
+        if (A.ent === 'semana' && !(d && d >= hoy && d <= addDias(hoy, 7))) return false; if (A.ent === 'sin' && d) return false;
+        if (A.fecha && d !== A.fecha) return false;
+        return true;
+      });
+      lista.replaceChildren(); cnt.textContent = `${data.length} de ${base.length} apartados`;
+      if (!data.length) lista.append(h('p', 'text-secondary', base.length ? 'No hay apartados con esos filtros.' : 'No hay apartados pendientes.'));
+      data.forEach(o => lista.append(pedidoCard(o, cat)));
+    };
+    qin.oninput = pinta; pinta();
+    box.replaceChildren(h('h5', null, 'Apartados'), qin, h('div', 'my-2'), filtros, cnt, lista);
+  });
+}
 
 /* ---------- Calendario de entregas (Ventas) ---------- */
 const addDias = (s, k) => { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + k); return ymd(d); };
@@ -806,7 +1009,7 @@ const ventas = () => {
 };
 function calendario() {
   return lazy(async box => {
-    const K = st.cal || (st.cal = { vista: 'mes', fecha: hoyStr(), sel: hoyStr() }), hoy = hoyStr(), pend = ['pendiente', 'listo'];
+    const K = st.cal || (st.cal = { vista: 'mes', fecha: hoyStr(), sel: hoyStr() }), hoy = hoyStr(), pend = ['pendiente', 'listo'], cook = st.me.cargo === 'cocinero';
     let a, b;
     if (K.vista === 'dia') a = b = K.fecha; else if (K.vista === 'semana') { a = lunesDe(K.fecha); b = addDias(a, 6); }
     else if (K.vista === 'mes') { a = lunesDe(K.fecha.slice(0, 8) + '01'); b = addDias(a, 41); } else { a = hoy; b = addDias(hoy, 30); }
@@ -834,6 +1037,10 @@ function calendario() {
       if (sab.size) c.append(h('div', 'small text-secondary mb-1', [...sab].map(([id, q]) => `${salsaName(id)}: ${q}`).join(' · ')));
       if (!os.length) c.append(h('div', 'small text-secondary', 'Sin entregas programadas.'));
       os.forEach(o => {
+        if (cook) {   // el cocinero solo ve qué hay que preparar: sin dinero ni botones
+          c.append(h('div', 'mt-2 pt-2 border-top', null, [h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${o.customers ? o.customers.name : 'Cliente'}`), h('span', null, `${tam([o])} tamales`)]),
+            ...lineas(o, cat).map(l => h('div', 'small', l.txt + (l.sub ? ` (${l.sub})` : ''))), h('div', 'mt-1', null, [badge(o.status === 'listo' ? 'Listo' : 'Por preparar', o.status === 'listo' ? 'info' : 'warning')])])); return;
+        }
         const [lab, col] = etiqueta(o), bt = h('button', 'btn btn-sm btn-outline-secondary w-100 text-start mt-2', null, [
           h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${o.customers ? o.customers.name : 'Mostrador'}`), h('span', null, `${tam([o])} tamales`)]),
           h('div', 'mt-1', null, [badge(lab, col), ...(o.status === 'listo' ? [badge('Listo', 'info')] : []), ...(o.assigned_to ? [badge('Reparte: ' + staffName(o.assigned_to), 'dark')] : [])])]);
@@ -911,4 +1118,17 @@ function matriz() {
     if (r.count > r.data.length) { const m = h('button', 'btn btn-outline-secondary w-100', 'Cargar más'); m.onclick = () => { M.n += 200; render(); }; box.append(m); }
     box.append(vac);
   });
+}
+
+/* ---------- Buscador de pedidos (Caja) ---------- */
+async function buscarPedidos(q) {
+  q = (q || '').trim(); if (!q) return [];
+  const num = q.replace(/^#/, ''), out = [];
+  if (/^\d{1,9}$/.test(num)) { const r = await sb.from('orders').select(ORD).eq('id', Number(num)); errDb(r.error); out.push(...r.data); }
+  const t = q.replace(/[%_,()\\*"']/g, ' ').trim();
+  if (t.length >= 2) {
+    const cs = await sb.from('customers').select('id').or(`name.ilike.%${t}%,phone.ilike.%${t}%`).limit(30); errDb(cs.error);
+    if (cs.data.length) { const r2 = await sb.from('orders').select(ORD).in('customer_id', cs.data.map(c => c.id)).order('created_at', { ascending: false }).limit(40); errDb(r2.error); out.push(...r2.data); }
+  }
+  const vistos = new Set(); return out.filter(o => !vistos.has(o.id) && vistos.add(o.id));
 }
