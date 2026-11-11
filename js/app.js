@@ -91,8 +91,8 @@ const salsaName = id => (st.cats.find(c=>c.id===id)||{}).name||'?';
 /* ---------- Vistas ---------- */
 function render(){
   app.replaceChildren(); document.body.classList.remove('login-bg');
-  const ALL={cocina:['fire','Cocina'],tamales:['basket3','Tamales'],caja:['cash-coin','Caja'],envios:['truck','Envíos'],apartados:['bookmark-star','Apartados'],clientes:['person-lines-fill','Clientes'],ventas:['receipt','Ventas'],catalogo:['journal-richtext','Catálogo'],cats:['tags','Categorías'],users:['people','Usuarios'],storage:['hdd','Almacenamiento'],matriz:['shield-check','Matriz']};
-  const allow=isAdmin()?Object.keys(ALL):(({cajero:['caja','envios','apartados','clientes','catalogo'],cocinero:['cocina','tamales','envios'],repartidor:['envios'],general:['cocina','tamales','caja','envios','apartados','clientes','ventas','catalogo']})[st.me.cargo]||['catalogo']);
+  const ALL={cocina:['fire','Cocina'],tamales:['basket3','Tamales'],caja:['cash-coin','Caja'],envios:['truck','Envíos'],apartados:['bookmark-star','Apartados'],clientes:['person-lines-fill','Clientes'],ventas:['receipt','Ventas'],catalogo:['journal-richtext','Catálogo'],cats:['tags','Categorías'],users:['people','Usuarios'],storage:['hdd','Almacenamiento'],matriz:['shield-check','Matriz'],calendario:['calendar3','Calendario']};
+  const allow=isAdmin()?Object.keys(ALL):(({cajero:['caja','envios','apartados','clientes','catalogo'],cocinero:['cocina','tamales','calendario'],repartidor:['envios'],general:['cocina','tamales','caja','envios','apartados','clientes','ventas','calendario','catalogo']})[st.me.cargo]||['catalogo']);
   if(!allow.includes(st.view)) st.view=allow[0];
   const go=v=>{st.view=v;render();window.scrollTo(0,0);};
   const logout=async()=>{ if(await confirmar('¿Cerrar sesión?')){ try{ await sb.rpc('log_event',{p_action:'logout',p_detail:null}); }catch(e){}
@@ -101,7 +101,7 @@ function render(){
   const mkTheme=()=>{ const t=h('select','form-select form-select-sm theme-sel');
     [['claro','Claro'],['oscuro','Oscuro'],['muertos','Día de Muertos'],['patrio','Fiestas Patrias'],['navidad','Navidad']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;t.append(o)});
     t.value=document.documentElement.dataset.theme; t.onchange=()=>setTheme(t.value); return t; };
-  const mainKeys=['cocina','tamales','caja','envios','apartados','clientes','ventas','catalogo'].filter(k=>allow.includes(k)), admKeys=['cats','users','storage','matriz'].filter(k=>allow.includes(k));
+  const mainKeys=['cocina','tamales','caja','envios','apartados','clientes','ventas','calendario','catalogo'].filter(k=>allow.includes(k)), admKeys=['cats','users','storage','matriz'].filter(k=>allow.includes(k));
   const link=(k,cls)=>{const b=h('button',cls+(st.view===k?' on':''),null,[ic(ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.title=ALL[k][1]; b.onclick=()=>go(k); return b;};
   const links=mainKeys.map(k=>link(k,'navlink'));
   if(admKeys.length){
@@ -114,7 +114,7 @@ function render(){
   const top=h('header','topbar no-print',null,[h('div','topbar-in',null,[h('div','brand',null,[h('i','bi bi-fire'),h('span',null,APP_CONFIG.BUSINESS_NAME||'Tamales')]),
     h('span','sect',ALL[st.view][1]),h('nav','topnav',null,links),h('div','topright',null,[mkTheme(),h('span','who d-none d-xl-inline',st.me.full_name),out])])]);
   // Navegación inferior (móvil): 4 principales + "Más"
-  const prio=['caja','envios','apartados','tamales','cocina','ventas','clientes','catalogo','cats','users','storage','matriz'].filter(k=>allow.includes(k));
+  const prio=['caja','envios','apartados','tamales','cocina','calendario','ventas','clientes','catalogo','cats','users','storage','matriz'].filter(k=>allow.includes(k));
   const prim=prio.length<=5?prio.slice(0,5):prio.slice(0,4), rest=prio.filter(k=>!prim.includes(k));
   const masSheet=()=>{
     const ov=h('div','ov sheet'), bx=h('div','box text-start'), close=()=>ov.remove(); ov.onclick=e=>{if(e.target===ov)close();};
@@ -124,7 +124,7 @@ function render(){
   };
   const items=prim.map(k=>{const b=h('button','bn'+(st.view===k?' on':''),null,[h('i','bi bi-'+ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.onclick=()=>go(k); return b;});
   const mas=h('button','bn'+(rest.includes(st.view)?' on':''),null,[h('i','bi bi-grid'),h('span',null,'Más'),...(rest.includes('users')&&st.resets.length?[h('span','badge bg-danger',String(st.resets.length))]:[])]); mas.onclick=masSheet; items.push(mas);
-  const V={cocina,tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento,matriz};
+  const V={cocina,tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento,matriz,calendario};
   app.append(top,h('main','container py-3',null,[(V[st.view]||cocina)()]),h('nav','bottom-nav no-print',null,items));
 }
 function setTheme(t){ const r=document.documentElement; r.dataset.theme=t; r.dataset.bsTheme=['oscuro','muertos','navidad'].includes(t)?'dark':'light'; localStorage.setItem('tema',t); }
