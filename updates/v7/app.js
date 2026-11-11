@@ -148,7 +148,7 @@ function cocina(){
   box.append(h('div','d-flex flex-wrap gap-2 mb-3',null,byKind('cantidad').map(c=>{
     const b=h('button','btn btn-acc btn-lg',String(c.value)); b.onclick=()=>guardar(c.value); return b;})));
   const n=h('input','form-control'); n.type='number'; n.min=1; n.max=500; n.step=1; n.inputMode='numeric'; n.placeholder='Otra cantidad'; n.value=st.draft.custom||''; n.oninput=()=>{st.draft.custom=n.value};
-  const go=h('button','btn btn-outline-secondary',null,[ic('pencil'),'Personalizar']); go.onclick=()=>guardar(n.value);
+  const go=h('button','btn btn-outline-secondary',null,[ic('pencil'),'Ingresar']); go.onclick=()=>guardar(n.value);
   box.append(h('div','input-group',null,[n,go]));
   return box;
 }
@@ -263,25 +263,138 @@ function usuarios(){
     }catch(e){ aviso.textContent=e.msg||'No se pudo crear el usuario.'; throw e; }
   });
   box.append(nm,ug,ph,rl,cg,add,aviso); wrap.append(box);
-  st.users.forEach(u=>{
-    const locked=u.id===st.me.id||(u.role==='master'&&st.me.role!=='master');
-    const cl=(CARGOS.find(c=>c[0]===u.cargo)||[])[1]||'';
-    const row=h('div','card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap',null,[h('span','flex-grow-1',`${u.full_name} (@${u.username||'—'}) · ${u.role==='usuario'?cl:u.role} · ${u.phone||'sin celular'}${u.active?'':' · deshabilitado'}`)]);
-    if(!locked){
-      const ed=h('button','btn btn-sm btn-outline-secondary',null,[ic('pencil')]); ed.title='Cargo y celular';
-      ed.onclick=()=>seguro(async()=>{
-        const f=await formModal('Datos del empleado',[{key:'c',label:'Cargo',options:CARGOS,value:u.cargo},{key:'p',label:'Celular (10 dígitos)',type:'tel',mode:'numeric',max:10,value:u.phone}],'Guardar'); if(!f) return;
-        const tel=f.p.replace(/\D/g,''); if(!/^[0-9]{10}$/.test(tel)) return toast('El celular debe tener 10 dígitos.',false);
-        if(!await confirmar(`¿Guardar los cambios de ${u.full_name}?`)) return;
-        await llamar({action:'update_profile',user_id:u.id,cargo:f.c,phone:tel}); await loadAll(); render(); toast('Actualizado');
-      });
-      const rs=h('button','btn btn-sm btn-outline-secondary',null,[ic('key')]); rs.title='Restablecer contraseña'; rs.onclick=()=>reset(u);
-      const tg=h('button','btn btn-sm btn-outline-'+(u.active?'danger':'success'),null,[ic(u.active?'person-x':'person-check')]); tg.title=u.active?'Deshabilitar':'Habilitar';
-      tg.onclick=()=>seguro(async()=>{ if(!await confirmar(u.active?`¿Deshabilitar a ${u.full_name}?`:`¿Habilitar a ${u.full_name}?`))return; await llamar({action:'set_active',user_id:u.id,active:!u.active}); await loadAll(); render(); toast('Listo'); });
-      row.append(ed,rs,tg);
-    }
-    wrap.append(row);
+
+  // Filtros y ordenación de usuarios
+  st.userFilter = st.userFilter || { estado: 'todos', cargo: 'todos', q: '', orden: 'activos' };
+  const uf = st.userFilter;
+
+  const fCard = h('div', 'card p-3 mb-3');
+  const fTop = h('div', 'd-flex gap-2 flex-wrap mb-2');
+  const qInp = h('input', 'form-control flex-grow-1');
+  qInp.placeholder = 'Buscar por nombre, @usuario o celular...';
+  qInp.value = uf.q;
+  qInp.style.minWidth = '200px';
+
+  const ordSel = h('select', 'form-select');
+  ordSel.style.width = 'auto';
+  [['activos','Activos primero'],['deshabilitados','Deshabilitados primero'],['az','Nombre A-Z']].forEach(([v,l])=>{
+    const o = h('option', null, l); o.value = v; if (uf.orden === v) o.selected = true; ordSel.append(o);
   });
+
+  const cgSel = h('select', 'form-select');
+  cgSel.style.width = 'auto';
+  [['todos','Todos los cargos'],['administrador','Administradores'],...CARGOS].forEach(([v,l])=>{
+    const o = h('option', null, l); o.value = v; if (uf.cargo === v) o.selected = true; cgSel.append(o);
+  });
+
+  fTop.append(qInp, cgSel, ordSel);
+
+  const chipsDiv = h('div', 'd-flex gap-2 flex-wrap align-items-center');
+  fCard.append(fTop, chipsDiv);
+  wrap.append(fCard);
+
+  const listWrap = h('div');
+  wrap.append(listWrap);
+
+  const pintar = () => {
+    chipsDiv.replaceChildren();
+    const tot = st.users.length;
+    const act = st.users.filter(x => x.active).length;
+    const des = tot - act;
+    [['todos', `Todos (${tot})`], ['activos', `Activos (${act})`], ['deshabilitados', `Deshabilitados (${des})`]].forEach(([stKey, lbl]) => {
+      const chip = h('button', 'chip' + (uf.estado === stKey ? ' on' : ''), lbl);
+      chip.onclick = () => { uf.estado = stKey; pintar(); };
+      chipsDiv.append(chip);
+    });
+
+    let list = [...st.users];
+    if (uf.q.trim()) {
+      const q = uf.q.trim().toLowerCase();
+      list = list.filter(u =>
+        (u.full_name || '').toLowerCase().includes(q) ||
+        (u.username || '').toLowerCase().includes(q) ||
+        (u.phone || '').includes(q)
+      );
+    }
+    if (uf.estado === 'activos') list = list.filter(u => u.active);
+    else if (uf.estado === 'deshabilitados') list = list.filter(u => !u.active);
+
+    if (uf.cargo !== 'todos') {
+      list = list.filter(u => (u.role === uf.cargo || u.cargo === uf.cargo));
+    }
+
+    list.sort((a, b) => {
+      if (uf.orden === 'activos') {
+        if (a.active !== b.active) return a.active ? -1 : 1;
+      } else if (uf.orden === 'deshabilitados') {
+        if (a.active !== b.active) return a.active ? 1 : -1;
+      }
+      return (a.full_name || '').localeCompare(b.full_name || '', 'es', { sensitivity: 'base' });
+    });
+
+    listWrap.replaceChildren();
+    if (!list.length) {
+      listWrap.append(h('div', 'card p-4 text-center text-secondary', 'No se encontraron usuarios con esos filtros.'));
+      return;
+    }
+
+    list.forEach(u => {
+      const locked = u.id === st.me.id || (u.role === 'master' && st.me.role !== 'master');
+      const cl = (CARGOS.find(c => c[0] === u.cargo) || [])[1] || '';
+      const rolTxt = u.role === 'usuario' ? cl : u.role;
+      const stBadge = u.active
+        ? h('span', 'badge bg-success-subtle text-success border border-success-subtle ms-2', 'activo')
+        : h('span', 'badge bg-secondary-subtle text-secondary border border-secondary-subtle ms-2', 'deshabilitado');
+
+      const info = h('span', 'flex-grow-1', null, [
+        h('strong', null, u.full_name),
+        h('span', 'text-secondary ms-1', `(@${u.username || '—'})`),
+        h('span', 'text-secondary mx-1', '·'),
+        h('span', null, rolTxt),
+        h('span', 'text-secondary mx-1', '·'),
+        h('span', 'text-secondary', u.phone || 'sin celular'),
+        stBadge
+      ]);
+
+      const row = h('div', 'card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap' + (u.active ? '' : ' opacity-75'), null, [info]);
+
+      if (!locked) {
+        const ed = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('pencil')]); ed.title = 'Cargo y celular';
+        ed.onclick = () => seguro(async () => {
+          const f = await formModal('Datos del empleado', [{ key: 'c', label: 'Cargo', options: CARGOS, value: u.cargo }, { key: 'p', label: 'Celular (10 dígitos)', type: 'tel', mode: 'numeric', max: 10, value: u.phone }], 'Guardar'); if (!f) return;
+          const tel = f.p.replace(/\D/g, ''); if (!/^[0-9]{10}$/.test(tel)) return toast('El celular debe tener 10 dígitos.', false);
+          if (!await confirmar(`¿Guardar los cambios de ${u.full_name}?`)) return;
+          await llamar({ action: 'update_profile', user_id: u.id, cargo: f.c, phone: tel }); await loadAll(); render(); toast('Actualizado');
+        });
+
+        const rs = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('key')]); rs.title = 'Restablecer contraseña'; rs.onclick = () => reset(u);
+
+        const tg = h('button', 'btn btn-sm btn-outline-' + (u.active ? 'secondary' : 'success'), null, [ic(u.active ? 'person-x' : 'person-check')]);
+        tg.title = u.active ? 'Deshabilitar' : 'Habilitar';
+        tg.onclick = () => seguro(async () => {
+          if (!await confirmar(u.active ? `¿Deshabilitar a ${u.full_name}?` : `¿Habilitar a ${u.full_name}?`)) return;
+          await llamar({ action: 'set_active', user_id: u.id, active: !u.active }); await loadAll(); render(); toast('Listo');
+        });
+
+        const del = h('button', 'btn btn-sm btn-outline-danger', null, [ic('trash')]);
+        del.title = 'Eliminar definitivamente';
+        del.onclick = () => seguro(async () => {
+          if (!await confirmar(`¿Eliminar definitivamente a ${u.full_name} (@${u.username})?\n\nNota: Si ya tiene historial (ventas, pedidos o cortes de caja) la base de datos lo protegerá y deberá permanecer deshabilitado.`)) return;
+          await llamar({ action: 'delete', user_id: u.id });
+          await loadAll(); render(); toast('Usuario eliminado permanentemente');
+        });
+
+        row.append(ed, rs, tg, del);
+      }
+      listWrap.append(row);
+    });
+  };
+
+  qInp.oninput = () => { uf.q = qInp.value; pintar(); };
+  ordSel.onchange = () => { uf.orden = ordSel.value; pintar(); };
+  cgSel.onchange = () => { uf.cargo = cgSel.value; pintar(); };
+
+  pintar();
   return wrap;
 }
 function cambiarClaveView(){

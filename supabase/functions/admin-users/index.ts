@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
     const target = async () => {
       if (!UUID.test(b.user_id ?? "")) throw new Error("Usuario inválido");
       if (b.user_id === user.id) throw new Error("No puedes hacerlo sobre tu propia cuenta");
-      const { data: t } = await admin.from("profiles").select("id,role").eq("id", b.user_id).single();
+      const { data: t } = await admin.from("profiles").select("id,role,username").eq("id", b.user_id).single();
       if (!t) throw new Error("Usuario no encontrado");
       if (t.role === "master" && !isMaster) throw new Error("Solo un master puede gestionar a un master");
       return t;
@@ -119,6 +119,20 @@ Deno.serve(async (req) => {
       const { error } = await admin.from("profiles").update({ cargo, phone }).eq("id", t.id);
       if (error) throw new Error("No se pudo actualizar");
       await logA("editar", t.id, `Cambió cargo a ${cargo} y celular`);
+      return json({ ok: true });
+    }
+
+    if (b.action === "delete") {
+      const t = await target();
+      const { error } = await admin.auth.admin.deleteUser(t.id);
+      if (error) {
+        console.error("delete_user:", error);
+        if (/foreign key|violat|referenced/i.test(error.message)) {
+          throw new Error("No se puede eliminar porque este usuario ya tiene historial (ventas, pedidos o cortes). En su lugar, debes mantenerlo deshabilitado.");
+        }
+        throw new Error("No se pudo eliminar: " + error.message);
+      }
+      await logA("eliminar", t.id, `Eliminó permanentemente al usuario @${t.username ?? t.id}`);
       return json({ ok: true });
     }
 
