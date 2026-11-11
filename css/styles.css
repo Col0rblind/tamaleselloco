@@ -22,7 +22,7 @@ hr{border-color:var(--line);opacity:1}
 .input-group-text{background:var(--soft);color:var(--muted);border-color:var(--line)}
 .table{--bs-table-bg:transparent;--bs-table-color:var(--text);--bs-table-border-color:var(--line)}
 .progress{background:var(--soft)}
-.card>.input-group,.card>.form-control,.card>.form-select{max-width:420px}
+.card>.input-group,.card>.form-control,.card>.form-select{max-width:425px}
 
 /* Botones: el hover nunca pierde contraste */
 .btn{border-radius:10px}
