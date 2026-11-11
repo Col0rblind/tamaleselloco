@@ -125,7 +125,7 @@ function render(){
   const items=prim.map(k=>{const b=h('button','bn'+(st.view===k?' on':''),null,[h('i','bi bi-'+ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.onclick=()=>go(k); return b;});
   const mas=h('button','bn'+(rest.includes(st.view)?' on':''),null,[h('i','bi bi-grid'),h('span',null,'Más'),...(rest.includes('users')&&st.resets.length?[h('span','badge bg-danger',String(st.resets.length))]:[])]); mas.onclick=masSheet; items.push(mas);
   const V={cocina,tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento,matriz,calendario};
-  app.append(top,h('main','container py-3',null,[(V[st.view]||cocina)()]),h('nav','bottom-nav no-print',null,items));
+  app.append(top,h('main','container pt-3 pb-5 pb-md-3',null,[(V[st.view]||cocina)()]),h('nav','bottom-nav no-print',null,items));
 }
 function setTheme(t){ const r=document.documentElement; r.dataset.theme=t; r.dataset.bsTheme=['oscuro','muertos','navidad'].includes(t)?'dark':'light'; localStorage.setItem('tema',t); }
 

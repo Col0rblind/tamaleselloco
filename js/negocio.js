@@ -415,21 +415,21 @@ function caja() {
       });
 
       if (!cliActual) {
-        const btnBuscar = h('button', 'btn btn-outline-secondary w-100 text-start d-flex align-items-center justify-content-between p-2');
+        const btnBuscar = h('button', 'btn btn-outline-secondary flex-grow-1 text-start d-flex align-items-center justify-content-between p-2');
         btnBuscar.append(
-          h('span', 'text-secondary d-flex align-items-center gap-2', null, [ic('search'), 'Seleccionar cliente (o dejar mostrador)']),
-          h('span', 'badge bg-secondary-subtle text-secondary', 'Opcional')
+          h('span', 'text-secondary d-flex align-items-center gap-2 text-truncate me-2', null, [ic('search'), h('span', 'text-truncate', 'Seleccionar cliente (o dejar mostrador)')]),
+          h('span', 'badge bg-secondary-subtle text-secondary flex-shrink-0', 'Opcional')
         );
         btnBuscar.onclick = abrirSelector;
 
-        const btnNuevo = h('button', 'btn btn-outline-secondary', null, [ic('person-plus')]);
+        const btnNuevo = h('button', 'btn btn-outline-secondary flex-shrink-0 d-flex align-items-center justify-content-center px-3', null, [ic('person-plus')]);
         btnNuevo.title = 'Nuevo cliente';
         btnNuevo.onclick = () => seguro(async () => {
           const nn = await formCliente(null);
           if (nn) { C.customer = String(nn.id); toast('Cliente guardado'); render(); }
         });
 
-        cliBox.append(h('div', 'input-group', null, [btnBuscar, btnNuevo]));
+        cliBox.append(h('div', 'input-group flex-nowrap', null, [btnBuscar, btnNuevo]));
       } else {
         const selCard = h('div', 'card p-2 d-flex flex-row align-items-center gap-2 border-primary-subtle bg-primary bg-opacity-10');
         const info = h('div', 'flex-grow-1 text-truncate', null, [

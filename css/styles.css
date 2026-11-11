@@ -22,7 +22,7 @@ hr{border-color:var(--line);opacity:1}
 .input-group-text{background:var(--soft);color:var(--muted);border-color:var(--line)}
 .table{--bs-table-bg:transparent;--bs-table-color:var(--text);--bs-table-border-color:var(--line)}
 .progress{background:var(--soft)}
-.card>.input-group,.card>.form-control,.card>.form-select{max-width:430px}
+.card>.input-group,.card>.form-control,.card>.form-select{max-width:420px}
 
 /* Botones: el hover nunca pierde contraste */
 .btn{border-radius:10px}
@@ -56,7 +56,7 @@ hr{border-color:var(--line);opacity:1}
 .bn .badge{position:absolute;top:2px;right:22%}
 main.container{max-width:1150px}
 @media(min-width:768px){.topnav,.topright{display:flex}.bottom-nav{display:none}.sect{display:none}}
-@media(max-width:767.98px){main.container{padding-bottom:5.5rem}.big{font-size:2.2rem}}
+@media(max-width:767.98px){main.container,main{padding-bottom:calc(6.5rem + env(safe-area-inset-bottom, 0px))!important}.big{font-size:2.2rem}}
 
 /* Ventanas y hoja inferior */
 .ov{position:fixed;inset:0;background:rgba(20,18,15,.5);display:flex;align-items:center;justify-content:center;z-index:2000;animation:fi .2s;padding:12px}
