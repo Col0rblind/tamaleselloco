@@ -5,26 +5,29 @@ const $$ = n => Number(n || 0).toLocaleString('es-MX', { style: 'currency', curr
 const fdt = d => new Date(d).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 const sum = a => (a || []).reduce((x, y) => x + Number(y.amount), 0);
 const r2 = n => Math.round(n * 100) / 100;
-const KIND = { mostrador: 'Sucursal', envio: 'Domicilio', apartado: 'Apartado' };
-const DL = { por_enviar: 'Por enviar', en_camino: 'En camino', entregado: 'Entregado' };
+const KIND = { mostrador: 'Sucursal', envio: 'Entrega', apartado: 'Apartado' };
+const DL = { por_enviar: 'Por entregar', en_camino: 'En camino', entregado: 'Entregado' };
 const METODOS = [['efectivo', 'Efectivo'], ['transferencia', 'Transferencia'], ['tarjeta', 'Tarjeta']];
-const CARGOS = [['cajero', 'Cajero'], ['repartidor', 'Repartidor'], ['cocinero', 'Cocinero'], ['general', 'Otro / general']];
+const CARGOS = [['cajero', 'Cajero'], ['general', 'Otro / general']];
 const safe = s => /^[=+\-@]/.test(String(s)) ? "'" + s : String(s);
 const badge = (t, c) => h('span', 'badge bg-' + c + ' me-1', t);
 const canCash = () => isAdmin() || ['cajero', 'general'].includes(st.me.cargo);
-const canKitchen = () => isAdmin() || ['cocinero', 'general'].includes(st.me.cargo);
-const newCart = () => ({ items: {}, prices: {}, kind: 'mostrador', customer: '', note: '', pago: newPago(), fecha: '', hora: '', estado: '', entrega: '', editing: null, back: 'caja' });
+const canKitchen = () => true;
+const newCart = () => ({ items: {}, prices: {}, kind: 'mostrador', customer: '', responsible: (st.me ? st.me.id : ''), note: '', pago: newPago(), fecha: '', hora: '', estado: '', entrega: '', editing: null, back: 'caja' });
 const bad = m => { const e = new Error(m); e.msg = m; return e; };
 const horaMilitar = t => t ? `${String(t).slice(0, 5)} hrs` : '';
 const fechaHoraLarga = (f, h) => { if (!f) return ''; const fl = fechaLarga(f); return h ? `${fl} a las ${horaMilitar(h)}` : fl; };
 const fechaHoraCorta = (f, h) => { if (!f) return ''; const fc = fechaCorta(f); return h ? `${fc} · ${horaMilitar(h)}` : fc; };
-let ORD = 'id,total,status,kind,delivery,delivery_date,delivery_time,note,created_at,customer_id,stock_debited,created_by,assigned_to,delivered_by,customers(name,phone,colony,street,street_number,address),payments(id,amount,method,tendered,created_at,created_by),order_items(qty,unit_price,product_id)';
+let ORD = 'id,total,status,kind,delivery,delivery_date,delivery_time,responsible_id,note,created_at,customer_id,stock_debited,created_by,assigned_to,delivered_by,customers(name,phone,colony,street,street_number,address),payments(id,amount,method,tendered,created_at,created_by),order_items(qty,unit_price,product_id)';
 
 /* ---------- Utilidades ---------- */
 function errDb(e) {
   if (!e) return;
   if (e.message && e.message.includes('delivery_time')) {
     ORD = ORD.replace(',delivery_time', '');
+  }
+  if (e.message && e.message.includes('responsible_id')) {
+    ORD = ORD.replace(',responsible_id', '');
   }
   const x = new Error(e.message);
   if (e.code === 'P0001') x.msg = e.message; else console.error(e);
@@ -35,11 +38,16 @@ async function crearPedidoRPC(params) {
   try {
     return await rpc('create_order', params);
   } catch (err) {
+    if (params.p_responsible !== undefined && (String(err?.message || '').includes('p_responsible') || String(err?.message || '').includes('create_order') || err?.code === 'PGRST202')) {
+      const fallback = { ...params };
+      delete fallback.p_responsible;
+      return await crearPedidoRPC(fallback);
+    }
     if (params.p_delivery_time !== undefined && (String(err?.message || '').includes('p_delivery_time') || String(err?.message || '').includes('create_order') || err?.code === 'PGRST202')) {
       const fallback = { ...params };
       delete fallback.p_delivery_time;
       const res = await rpc('create_order', fallback);
-      toast('Pedido guardado. Aplica migracion_v8.sql en Supabase para registrar la hora militar.', true);
+      toast('Pedido guardado. Aplica migracion_v9.sql en Supabase para registrar la hora militar y responsable.', true);
       return res;
     }
     throw err;
@@ -49,11 +57,16 @@ async function updatePedidoRPC(params) {
   try {
     return await rpc('update_order', params);
   } catch (err) {
+    if (params.p_responsible !== undefined && (String(err?.message || '').includes('p_responsible') || String(err?.message || '').includes('update_order') || err?.code === 'PGRST202')) {
+      const fallback = { ...params };
+      delete fallback.p_responsible;
+      return await updatePedidoRPC(fallback);
+    }
     if (params.p_delivery_time !== undefined && (String(err?.message || '').includes('p_delivery_time') || String(err?.message || '').includes('update_order') || err?.code === 'PGRST202')) {
       const fallback = { ...params };
       delete fallback.p_delivery_time;
       const res = await rpc('update_order', fallback);
-      toast('Pedido actualizado. Aplica migracion_v8.sql en Supabase para registrar la hora militar.', true);
+      toast('Pedido actualizado. Aplica migracion_v9.sql en Supabase para registrar la hora militar y responsable.', true);
       return res;
     }
     throw err;
@@ -176,9 +189,60 @@ function verDetalle(o, cat) {
   lineas(o, cat).forEach(l => { bx.append(h('div', 'd-flex justify-content-between', null, [h('span', null, `${l.txt} (${$$(l.unit)} c/u)`), h('span', null, $$(l.total))])); if (l.sub) bx.append(h('div', 'small text-secondary ps-2', 'Incluye: ' + l.sub)); });
   bx.append(h('hr', 'my-2'), h('div', 'd-flex justify-content-between fw-bold', null, [h('span', null, 'Total'), h('span', null, $$(o.total))]),
     h('div', 'small', `Pagado ${$$(pg)} · Saldo ${$$(Math.max(0, Number(o.total) - pg))}`));
-  o.payments.forEach(p => bx.append(h('div', 'small text-secondary', `${fdt(p.created_at)} · ${p.method} · ${$$(p.amount)} · cobró ${staffName(p.created_by)}`)));
+  if (o.payments && o.payments.length) {
+    bx.append(h('div', 'small fw-semibold mt-2 mb-1', 'Abonos / Pagos:'));
+    o.payments.forEach(p => {
+      const pRow = h('div', 'small text-secondary d-flex align-items-center gap-2 mb-1 flex-wrap');
+      pRow.append(h('span', 'flex-grow-1', `${fdt(p.created_at)} · ${p.method} · ${$$(p.amount)} · cobró ${staffName(p.created_by)}`));
+      if (canCash()) {
+        const btnEdit = h('button', 'btn btn-sm btn-outline-secondary p-0 px-2', null, [ic('pencil'), 'Editar']);
+        btnEdit.title = 'Editar abono';
+        btnEdit.onclick = () => seguro(async () => {
+          const f = await formModal('Editar abono', [
+            { key: 'amount', label: 'Monto del abono ($)', type: 'number', step: '0.01', min: '0.01', value: p.amount },
+            { key: 'method', label: 'Método de pago', options: METODOS, value: p.method }
+          ], 'Guardar cambios');
+          if (!f) return;
+          const amt = Number(f.amount);
+          if (!amt || amt <= 0) return toast('El monto debe ser mayor a 0.', false);
+          if (!await confirmar(`¿Guardar cambios en este abono: ${$$(p.amount)} → ${$$(amt)} (${f.method})?`)) return;
+          try {
+            await rpc('edit_payment', { p_payment: p.id, p_amount: amt, p_method: f.method });
+          } catch (err) {
+            const { error } = await sb.from('payments').update({ amount: amt, method: f.method }).eq('id', p.id);
+            errDb(error);
+          }
+          ov.remove();
+          toast('Abono actualizado');
+          const updated = await cargarPedido(o.id);
+          render();
+          verDetalle(updated, cat);
+        });
+
+        const btnCancel = h('button', 'btn btn-sm btn-outline-danger p-0 px-2', null, [ic('trash'), 'Cancelar']);
+        btnCancel.title = 'Cancelar abono';
+        btnCancel.onclick = () => seguro(async () => {
+          if (!await confirmar(`¿Cancelar y eliminar este abono de ${$$(p.amount)} (${p.method})? No se puede deshacer.`)) return;
+          try {
+            await rpc('cancel_payment', { p_payment: p.id });
+          } catch (err) {
+            const { error } = await sb.from('payments').delete().eq('id', p.id);
+            errDb(error);
+          }
+          ov.remove();
+          toast('Abono cancelado');
+          const updated = await cargarPedido(o.id);
+          render();
+          verDetalle(updated, cat);
+        });
+
+        pRow.append(btnEdit, btnCancel);
+      }
+      bx.append(pRow);
+    });
+  }
   if (o.note) bx.append(h('div', 'small fst-italic mt-1', 'Nota: ' + o.note));
-  bx.append(h('div', 'small text-secondary mt-2', `Registró: ${staffName(o.created_by)} · Reparte: ${staffName(o.assigned_to)} · Entregó: ${staffName(o.delivered_by)}`));
+  bx.append(h('div', 'small text-secondary mt-2', `Registró: ${staffName(o.created_by)} · Responsable: ${staffName(o.responsible_id || o.created_by)}${o.delivered_by ? ' · Entregó: ' + staffName(o.delivered_by) : ''}`));
   const tk = h('button', 'btn btn-outline-secondary w-100 mt-3', null, [ic('receipt'), 'Ver ticket']); tk.onclick = () => { ov.remove(); verTicket(o, cat); };
   const x = h('button', 'btn btn-acc w-100 mt-2', 'Cerrar'); x.onclick = () => ov.remove();
   bx.append(tk, x); ov.append(bx); document.body.append(ov);
@@ -188,12 +252,12 @@ function verDetalle(o, cat) {
 function editar(o) {
   const items = {}, prices = {};
   (o.order_items || []).forEach(i => { items[i.product_id] = (items[i.product_id] || 0) + i.qty; prices[i.product_id] = Number(i.unit_price); });
-  st.cart = { ...newCart(), items, prices, kind: o.kind, customer: o.customer_id ? String(o.customer_id) : '', note: o.note || '', fecha: o.delivery_date || '', hora: o.delivery_time ? o.delivery_time.slice(0, 5) : '',
+  st.cart = { ...newCart(), items, prices, kind: o.kind, customer: o.customer_id ? String(o.customer_id) : '', responsible: o.responsible_id || o.created_by || (st.me ? st.me.id : ''), note: o.note || '', fecha: o.delivery_date || '', hora: o.delivery_time ? o.delivery_time.slice(0, 5) : '',
     entrega: o.kind === 'envio' ? 'domicilio' : 'sucursal', editing: o.id, back: st.view };
   st.view = 'caja'; render();
 }
 function acciones(row, o, cat, saldo) {
-  const adm = isAdmin(), cg = st.me.cargo, cash = canCash(), repar = cg === 'repartidor', mio = o.assigned_to === st.me.id;
+  const adm = isAdmin(), cash = canCash();
   const pagado = saldo <= 0.001, abierto = ['pendiente', 'listo'].includes(o.status), domicilio = o.kind === 'envio', enCamino = domicilio && o.delivery === 'en_camino';
   const mk = (txt, icon, fn, cls = 'btn-outline-secondary') => { const b = h('button', 'btn btn-sm ' + cls, null, [ic(icon), txt]); b.onclick = () => seguro(fn); row.append(b); };
   const set = async (status, delivery, msg, aviso) => {
@@ -201,17 +265,13 @@ function acciones(row, o, cat, saldo) {
     await rpc('set_order_status', { p_order: o.id, p_status: status, p_delivery: delivery }); toast('Actualizado'); render(); if (aviso) avisar(await cargarPedido(o.id), aviso, cat);
   };
   mk('Detalle', 'list-ul', () => verDetalle(o, cat));
-  if (saldo > 0.001 && abierto && (cash || (repar && mio))) mk(enCamino ? 'Cobrar en domicilio' : 'Abonar', 'cash-coin', () => abonar(o, saldo, false, cat), 'btn-acc');
+  if (saldo > 0.001 && abierto && cash) mk(enCamino ? 'Cobrar en domicilio' : 'Abonar', 'cash-coin', () => abonar(o, saldo, false, cat), 'btn-acc');
   if (o.status === 'pendiente' && (adm || cash)) mk('Marcar listo', 'check2', () => set('listo', null, `¿El pedido #${o.id} está listo? Se descontarán los tamales del inventario.`, o.customer_id ? 'listo' : null));
-  if (domicilio && abierto && (adm || cash)) mk(o.assigned_to ? 'Cambiar repartidor' : 'Asignar repartidor', 'person-badge', () => asignar(o));
-  // Nada sale a reparto sin repartidor: si no hay uno asignado, se elige en ese momento
-  if (domicilio && abierto && o.delivery === 'por_enviar' && (adm || cash || (repar && mio && o.status === 'listo')))
-    mk('Salió a reparto', 'truck', async () => {
-      if (!o.assigned_to) { const u = await elegirRepartidor(o); if (!u) return; await rpc('assign_order', { p_order: o.id, p_user: u }); }
-      await set(o.status === 'pendiente' ? 'listo' : o.status, 'en_camino', `¿El pedido #${o.id} salió a reparto?`, 'camino');
+  if (domicilio && abierto && o.delivery === 'por_enviar' && (adm || cash))
+    mk('Salió a entrega', 'truck', async () => {
+      await set(o.status === 'pendiente' ? 'listo' : o.status, 'en_camino', `¿El pedido #${o.id} salió a entrega?`, 'camino');
     });
-  // El repartidor registra el dinero que recibe en el domicilio antes de entregar
-  if (enCamino && abierto && (adm || cash || (repar && mio)))
+  if (enCamino && abierto && (adm || cash))
     mk(saldo > 0.001 ? 'Cobrar y entregar' : 'Entregado', 'box-seam', async () => {
       if (saldo > 0.001) { const ap = await abonar(o, saldo, true, cat); if (ap === null) return; if (ap < saldo - 0.001) { toast('Aún queda saldo por cobrar.', false); render(); return; } }
       await set('entregado', null, `¿Confirmas que el pedido #${o.id} fue entregado?`, 'entregado');
@@ -226,12 +286,11 @@ function pedidoCard(o, cat) {
   const pg = sum(o.payments), saldo = r2(Number(o.total) - pg), [t, col] = etiqueta(o), cu = o.customers, c = h('div', 'card p-3 mb-2');
   c.append(h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${cu ? cu.name : 'Mostrador'}`), h('strong', null, $$(o.total))]),
     h('div', 'my-1', null, [badge(t, col), badge(KIND[o.kind], 'dark'), ...(o.status === 'listo' ? [badge('Listo', 'info')] : []), ...(o.delivery && o.status !== 'entregado' ? [badge(DL[o.delivery], 'primary')] : []),
-      ...(o.kind === 'envio' && !o.assigned_to && ['pendiente', 'listo'].includes(o.status) ? [badge('Sin repartidor', 'warning')] : []),
       ...(o.delivery_date ? [badge('Entrega: ' + fechaHoraCorta(o.delivery_date, o.delivery_time), o.delivery_date < hoyStr() && ['pendiente', 'listo'].includes(o.status) ? 'danger' : 'dark')] : [])]));
   lineas(o, cat).forEach(l => c.append(h('div', 'small', l.txt + (l.sub ? ` (${l.sub})` : ''))));
   if (o.kind !== 'mostrador' && cu) c.append(h('div', 'small text-secondary mt-1', null, [ic('geo-alt'), dirCliente(cu) + ' · ', ic('telephone'), cu.phone || 'sin celular']));
   if (o.note) c.append(h('div', 'small fst-italic', 'Nota: ' + o.note));
-  c.append(h('div', 'small text-secondary', `Registró: ${staffName(o.created_by)}${o.assigned_to ? ' · Reparte: ' + staffName(o.assigned_to) : ''}${o.delivered_by ? ' · Entregó: ' + staffName(o.delivered_by) : ''}`));
+  c.append(h('div', 'small text-secondary', `Registró: ${staffName(o.created_by)} · Responsable: ${staffName(o.responsible_id || o.created_by)}${o.delivered_by ? ' · Entregó: ' + staffName(o.delivered_by) : ''}`));
   c.append(h('div', 'small mt-1', `Pagado ${$$(pg)} · Saldo ${$$(saldo)}`));
   const row = h('div', 'd-flex flex-wrap gap-2 mt-2'); acciones(row, o, cat, saldo); c.append(row); return c;
 }
@@ -489,7 +548,24 @@ function caja() {
       }
 
       const note = h('input', 'form-control mb-2'); note.placeholder = 'Nota (opcional)'; note.maxLength = 200; note.value = C.note; note.oninput = () => { C.note = note.value; };
-      cart.append(cliBox, note);
+
+      const respSel = h('select', 'form-select');
+      const staffList = staffArr().filter(x => x.active);
+      if (!C.responsible) C.responsible = (st.me ? st.me.id : '');
+      respSel.append(Object.assign(h('option', null, '— Seleccionar responsable —'), { value: '' }));
+      staffList.forEach(s => {
+        const opt = h('option', null, s.full_name + (s.id === (st.me && st.me.id) ? ' (Tú)' : ''));
+        opt.value = s.id;
+        if (C.responsible === s.id) opt.selected = true;
+        respSel.append(opt);
+      });
+      respSel.onchange = () => { C.responsible = respSel.value; };
+      const respBox = h('div', 'mb-2', null, [
+        h('label', 'small text-secondary mb-1 fw-semibold d-flex align-items-center gap-1', null, [ic('person-check'), 'Responsable del pedido (trae cliente)']),
+        respSel
+      ]);
+
+      cart.append(cliBox, respBox, note);
 
       const defs = ESTADOS.mostrador, hint = h('div', 'small fw-semibold mt-1'), chg = h('div', 'fs-5 mt-1');
       const entregaYa = () => (defs.find(x => x[0] === C.estado) || [])[2] === 1;
@@ -506,10 +582,10 @@ function caja() {
       }
       if (C.editing || (C.estado && !entregaYa())) {
         const en = h('select', 'form-select mb-1'); en.append(Object.assign(h('option', null, '— ¿Dónde se entrega? —'), { value: '' }));
-        [['sucursal', 'En sucursal (queda en Apartados)'], ['domicilio', 'A domicilio (va a Envíos)']].forEach(([v, l]) => en.append(Object.assign(h('option', null, l), { value: v }))); en.value = C.entrega; en.onchange = () => { C.entrega = en.value; draw(); };
+        [['sucursal', 'En sucursal (queda en Apartados)'], ['domicilio', 'A domicilio (va a Entregas)']].forEach(([v, l]) => en.append(Object.assign(h('option', null, l), { value: v }))); en.value = C.entrega; en.onchange = () => { C.entrega = en.value; draw(); };
         const pagoOk = calcPago(pagosDe(C.pago), total).ap >= total && total > 0;
         cart.append(h('label', 'small text-secondary mt-2', 'Entrega'), en, ...(C.entrega ? [h('div', 'small text-secondary mb-1', C.entrega === 'sucursal' ? 'Pasará a Apartados hasta entregarlo en sucursal.' :
-          (pagoOk || C.editing ? 'Pasará a Envíos, en espera de asignar repartidor.' : 'Con saldo pendiente: estará en Apartados hasta que esté listo; después pasa a Envíos y el repartidor cobra en el domicilio.'))] : []));
+          'Pasará a Entregas para su entrega a domicilio.')] : []));
         const fd = h('input', 'form-control'); fd.type = 'date'; fd.min = hoyStr(); fd.value = C.fecha; fd.onchange = () => { C.fecha = fd.value; };
         const fh = h('input', 'form-control'); fh.type = 'time'; fh.value = C.hora || ''; fh.placeholder = '14:00'; fh.onchange = () => { C.hora = fh.value; };
         const rowFechas = h('div', 'row g-2 mb-2', null, [
@@ -523,6 +599,7 @@ function caja() {
       const go = h('button', 'btn btn-acc btn-lg w-100 mt-3', null, [ic('check2-circle'), (C.editing ? 'Guardar cambios · ' : 'Guardar pedido · ') + $$(total)]);
       go.onclick = () => seguro(async () => {
         if (!items.length) return toast('Agrega al menos un producto.', false);
+        if (!C.responsible) return toast('Selecciona el responsable del pedido.', false);
         if (C.editing) {
           if (!C.customer) return toast('Los pedidos por entregar necesitan cliente.', false);
           if (!C.entrega) return toast('Elige si se entrega en sucursal o a domicilio.', false);
@@ -531,7 +608,7 @@ function caja() {
           if (!C.fecha) return toast('Elige la fecha de entrega.', false);
           if (!C.hora) return toast('Elige la hora militar de entrega (ej. 14:30).', false);
           if (!await confirmar(`¿Guardar los cambios del pedido #${C.editing} para el ${fechaHoraLarga(C.fecha, C.hora)}?`)) return;
-          await updatePedidoRPC({ p_order: C.editing, p_customer: Number(C.customer), p_kind: kindE, p_note: C.note || null, p_items: payload(), p_delivery_date: C.fecha || null, p_delivery_time: C.hora || null });
+          await updatePedidoRPC({ p_order: C.editing, p_customer: Number(C.customer), p_kind: kindE, p_note: C.note || null, p_items: payload(), p_delivery_date: C.fecha || null, p_delivery_time: C.hora || null, p_responsible: C.responsible || null });
           const b = C.back; st.cart = newCart(); st.view = b || 'caja'; toast('Pedido actualizado'); render(); return;
         }
         const d = defs.find(x => x[0] === C.estado); if (!d) return toast('Elige el estado de la venta.', false);
@@ -546,7 +623,7 @@ function caja() {
         const pays = pagosDe(C.pago), c = calcPago(pays, total); if (c.error) return toast(c.error, false);
         const er = validaEstado(d[1], c.ap, total); if (er) return toast(er, false);
         if (!await confirmar(`¿Guardar como ${C.estado} por ${$$(total)}${c.ap ? ' con pago de ' + $$(c.ap) : ''}${ya ? '' : ' ' + (C.entrega === 'domicilio' ? ' a domicilio' : ' en sucursal') + ' el ' + fechaHoraLarga(C.fecha, C.hora)}?`)) return;
-        const oid = await crearPedidoRPC({ p_customer: C.customer ? Number(C.customer) : null, p_kind: !ya && C.entrega === 'domicilio' ? 'envio' : 'mostrador', p_note: C.note || null, p_items: payload(), p_pays: pays, p_deliver: ya, p_delivery_date: ya ? null : C.fecha, p_delivery_time: ya ? null : C.hora });
+        const oid = await crearPedidoRPC({ p_customer: C.customer ? Number(C.customer) : null, p_kind: !ya && C.entrega === 'domicilio' ? 'envio' : 'mostrador', p_note: C.note || null, p_items: payload(), p_pays: pays, p_deliver: ya, p_delivery_date: ya ? null : C.fecha, p_delivery_time: ya ? null : C.hora, p_responsible: C.responsible || null });
         st.cart = newCart(); render(); verTicket(await cargarPedido(oid), cat, 'nuevo');
         if (c.cambio > 0) msgModal('Cambio a entregar', $$(c.cambio), `Recibido ${$$(c.recibido)} · Cuenta ${$$(total)}`);
       });
@@ -560,6 +637,28 @@ function caja() {
       ct.append(cb);
       lc.data.forEach(k => {
         const row = h('div', 'small d-flex align-items-center gap-2 mt-2 flex-wrap', null, [h('span', 'flex-grow-1', `${fdt(k.to_ts)} · Efvo ${$$(k.efectivo)} · Transf ${$$(k.transferencia)} · Tarj ${$$(k.tarjeta)}`)]);
+        if (canCash()) {
+          const ed = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('pencil'), 'Editar']); ed.title = 'Editar corte';
+          ed.onclick = () => seguro(async () => {
+            const f = await formModal('Editar corte de caja', [
+              { key: 'efectivo', label: 'Efectivo ($)', type: 'number', step: '0.01', min: 0, value: k.efectivo },
+              { key: 'transferencia', label: 'Transferencia ($)', type: 'number', step: '0.01', min: 0, value: k.transferencia },
+              { key: 'tarjeta', label: 'Tarjeta ($)', type: 'number', step: '0.01', min: 0, value: k.tarjeta }
+            ], 'Guardar cambios');
+            if (!f) return;
+            const ef = Number(f.efectivo) || 0, tr = Number(f.transferencia) || 0, tj = Number(f.tarjeta) || 0;
+            if (!await confirmar(`¿Guardar cambios en el corte de caja #${k.id}?\n\nEfectivo: ${$$(ef)}\nTransferencia: ${$$(tr)}\nTarjeta: ${$$(tj)}`)) return;
+            try {
+              await rpc('edit_cash_closure', { p_closure: k.id, p_efectivo: ef, p_transferencia: tr, p_tarjeta: tj });
+            } catch (err) {
+              const { error } = await sb.from('cash_closures').update({ efectivo: ef, transferencia: tr, tarjeta: tj }).eq('id', k.id);
+              errDb(error);
+            }
+            toast('Corte de caja actualizado');
+            render();
+          });
+          row.append(ed);
+        }
         if (isAdmin()) { const d = h('button', 'btn btn-sm btn-outline-danger', null, [ic('trash')]); d.title = 'Eliminar corte';
           d.onclick = () => seguro(async () => { if (!await confirmar('¿Eliminar este corte? No se puede deshacer.')) return; const { error } = await sb.from('cash_closures').delete().eq('id', k.id); errDb(error); toast('Corte eliminado'); render(); });
           row.append(d); }
@@ -574,28 +673,28 @@ function caja() {
 /* ---------- Ventas ---------- */
 function ventasLista() {
   return lazy(async box => {
-    const F = st.vf || (st.vf = { desde: hoyStr(), hasta: hoyStr(), est: 'todos', tipo: '', reg: '', rep: '', all: false });
+    const F = st.vf || (st.vf = { desde: hoyStr(), hasta: hoyStr(), est: 'todos', tipo: '', reg: '', resp: '', all: false });
     let q = sb.from('orders').select(ORD + ',order_tamales(salsa_id,qty)').order('created_at', { ascending: false }).limit(1000);
     if (!F.all) { const [a, b] = rango(F.desde, F.hasta); q = q.gte('created_at', a).lt('created_at', b); }
     if (F.tipo) q = q.eq('kind', F.tipo);
     if (F.reg) q = q.eq('created_by', F.reg);
-    if (F.rep) q = F.rep === 'none' ? q.is('assigned_to', null) : q.eq('assigned_to', F.rep);
     const [cat, r] = await Promise.all([getCat(), q]); if (r.error) throw r.error;
     const saldoDe = o => Number(o.total) - sum(o.payments), pend = o => ['pendiente', 'listo'].includes(o.status);
     const FIL = { todos: () => true, cobrar: o => o.status !== 'cancelado' && saldoDe(o) > 0.001, entregar: pend,
       pendientes: o => o.status !== 'cancelado' && (saldoDe(o) > 0.001 || pend(o)), cerrados: o => o.status === 'entregado' && saldoDe(o) <= 0.001, cancelados: o => o.status === 'cancelado' };
-    const data = r.data.filter(FIL[F.est] || FIL.todos), ok = data.filter(o => o.status !== 'cancelado');
+    const matchesResp = o => !F.resp || (o.responsible_id ? o.responsible_id === F.resp : o.created_by === F.resp);
+    const data = r.data.filter(matchesResp).filter(FIL[F.est] || FIL.todos), ok = data.filter(o => o.status !== 'cancelado');
 
     // Filtros
     const sel = (opts, val, fn) => { const s = h('select', 'form-select form-select-sm w-auto'); opts.forEach(([v, l]) => s.append(Object.assign(h('option', null, l), { value: v }))); s.value = val; s.onchange = () => { fn(s.value); render(); }; return s; };
-    const todos = staffArr(), reps = todos.filter(x => x.cargo === 'repartidor');
+    const todos = staffArr();
     const fechas = filtroFechas(F);
     const allc = h('button', 'chip' + (F.all ? ' on' : ''), 'Todas las fechas'); allc.onclick = () => { F.all = !F.all; render(); }; fechas.append(allc);
     const filtros = h('div', 'd-flex flex-wrap gap-2 align-items-center mb-3', null, [
       sel([['todos', 'Todos los estados'], ['pendientes', 'Pendientes (cobrar o entregar)'], ['cobrar', 'Por cobrar'], ['entregar', 'Por entregar'], ['cerrados', 'Pagados y entregados'], ['cancelados', 'Cancelados']], F.est, v => { F.est = v; }),
-      sel([['', 'Todos los tipos'], ['mostrador', 'Sucursal'], ['envio', 'Domicilio'], ['apartado', 'Apartado']], F.tipo, v => { F.tipo = v; }),
+      sel([['', 'Todos los tipos'], ['mostrador', 'Sucursal'], ['envio', 'Entrega'], ['apartado', 'Apartado']], F.tipo, v => { F.tipo = v; }),
       sel([['', 'Registró: todos'], ...todos.map(x => [x.id, x.full_name])], F.reg, v => { F.reg = v; }),
-      sel([['', 'Repartidor: todos'], ['none', 'Sin asignar'], ...reps.map(x => [x.id, x.full_name])], F.rep, v => { F.rep = v; })]);
+      sel([['', 'Responsable: todos'], ...todos.map(x => [x.id, x.full_name])], F.resp, v => { F.resp = v; })]);
 
     // Métricas
     const vendido = ok.reduce((a, o) => a + Number(o.total), 0), cobrado = ok.reduce((a, o) => a + sum(o.payments), 0);
@@ -613,7 +712,8 @@ function ventasLista() {
       barras('Tamales por sabor', [...sabores].map(([id, v]) => [salsaName(id), v]).sort((a, b) => b[1] - a[1]), v => v.toLocaleString('es-MX')),
       barras('Productos más vendidos (unidades)', agg(ok.flatMap(o => o.order_items), i => (cat.prods.get(i.product_id) || { name: '?' }).name, i => i.qty), v => v.toLocaleString('es-MX')),
       barras('Clientes que más pagaron', agg(ok.filter(o => o.customer_id), o => nm.get(o.customer_id), o => sum(o.payments)), $$, 5),
-      barras('Ventas por empleado (quién registró)', agg(ok, o => staffName(o.created_by), o => Number(o.total)), $$),
+      barras('Ventas por responsable (trae clientes)', agg(ok, o => staffName(o.responsible_id || o.created_by), o => Number(o.total)), $$),
+      barras('Ventas por quién registró', agg(ok, o => staffName(o.created_by), o => Number(o.total)), $$),
       barras('Ventas por día', dias, $$, 31)].map(c => h('div', 'col-lg-6', null, [c])));
 
     // Tabla
@@ -621,8 +721,8 @@ function ventasLista() {
     ex.onclick = () => seguro(async () => {
       if (typeof XLSX === 'undefined') return toast('No se cargó la librería de Excel.', false);
       if (!await confirmar('¿Descargar estas ventas en Excel?')) return;
-      const rows = [['#', 'Fecha', 'Cliente', 'Tipo', 'Estado', 'Fecha de entrega', 'Hora de entrega', 'Registró', 'Repartidor', 'Entregó', 'Productos', 'Total', 'Pagado', 'Saldo']].concat(data.map(o => {
-        const pg = sum(o.payments); return [o.id, fdt(o.created_at), safe(o.customers ? o.customers.name : 'Mostrador'), KIND[o.kind], etiqueta(o)[0], o.delivery_date || '', o.delivery_time ? o.delivery_time.slice(0, 5) : '', staffName(o.created_by), staffName(o.assigned_to), staffName(o.delivered_by),
+      const rows = [['#', 'Fecha', 'Cliente', 'Tipo', 'Estado', 'Fecha de entrega', 'Hora de entrega', 'Registró', 'Responsable', 'Entregó', 'Productos', 'Total', 'Pagado', 'Saldo']].concat(data.map(o => {
+        const pg = sum(o.payments); return [o.id, fdt(o.created_at), safe(o.customers ? o.customers.name : 'Mostrador'), KIND[o.kind], etiqueta(o)[0], o.delivery_date || '', o.delivery_time ? o.delivery_time.slice(0, 5) : '', staffName(o.created_by), staffName(o.responsible_id || o.created_by), staffName(o.delivered_by),
           safe(lineas(o, cat).map(l => l.txt).join('; ')), Number(o.total), pg, o.status === 'cancelado' ? 0 : Number(o.total) - pg]; }));
       const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Ventas');
       XLSX.writeFile(wb, `ventas_${new Date().toISOString().slice(0, 10)}.xlsx`); logEv('exportar', 'Ventas: ' + data.length + ' pedidos');
@@ -641,7 +741,7 @@ function ventasLista() {
         d.onclick = () => seguro(async () => { if (!await confirmar(`¿Eliminar definitivamente la venta #${o.id} y sus abonos?`)) return; const { error } = await sb.from('orders').delete().eq('id', o.id); errDb(error); toast('Venta eliminada'); render(); }); act.append(d);
       }
       tb.append(h('tr', cancel ? 'opacity-50' : '', null, [h('td', null, String(o.id)), h('td', null, fdt(o.created_at)),
-        h('td', null, null, [h('div', null, o.customers ? o.customers.name : 'Mostrador'), h('div', 'small text-secondary', `Registró: ${staffName(o.created_by)}${o.assigned_to ? ' · Reparte: ' + staffName(o.assigned_to) : ''}`)]),
+        h('td', null, null, [h('div', null, o.customers ? o.customers.name : 'Mostrador'), h('div', 'small text-secondary', `Registró: ${staffName(o.created_by)} · Resp: ${staffName(o.responsible_id || o.created_by)}`)]),
         h('td', null, null, [badge(lab, col)]), h('td', null, $$(o.total)), act]));
     });
     tbl.append(tb);
@@ -651,42 +751,115 @@ function ventasLista() {
   });
 }
 
-/* ---------- Tamales (antes "Hoy"): inventario y ollas ---------- */
+/* ---------- Tamales: registro de ollas, inventario y gestión ---------- */
 function tamales() {
   return lazy(async box => {
     const T = st.tf || (st.tf = { desde: hoyStr(), hasta: hoyStr() }), [a, b] = rango(T.desde, T.hasta);
-    const [res, r] = await Promise.all([rpc('tamales_resumen'), sb.from('batches').select('id,qty,created_at,salsa_id,created_by').gte('created_at', a).lt('created_at', b).order('created_at', { ascending: false }).limit(1000)]);
+    const [res, r] = await Promise.all([
+      rpc('tamales_resumen'),
+      sb.from('batches').select('id,qty,created_at,salsa_id,created_by').gte('created_at', a).lt('created_at', b).order('created_at', { ascending: false }).limit(1000)
+    ]);
     if (r.error) throw r.error;
     const hechos = new Map(); r.data.forEach(x => hechos.set(x.salsa_id, (hechos.get(x.salsa_id) || 0) + x.qty));
     const total = r.data.reduce((s, x) => s + x.qty, 0);
-    box.replaceChildren(h('h5', null, 'Tamales'), filtroFechas(T),
-      h('div', 'card p-3 mb-3 text-center', null, [h('div', 'big', total.toLocaleString('es-MX')), h('div', null, T.desde === T.hasta ? `tamales hechos el ${T.desde}` : `tamales hechos del ${T.desde} al ${T.hasta}`)]),
-      h('h6', null, 'Por sabor e inventario actual'));
+
+    // Registro de nuevas ollas de tamales
+    const regBox = h('div', 'card p-3 mb-3');
+    regBox.append(h('h5', 'mb-1', null, [ic('basket3'), 'Ingresar tamales']));
+    regBox.append(h('div', 'small text-secondary mb-2', '¿De qué salsa salió la olla?'));
+    const salsas = byKind('salsa');
+    if (!salsas.length) regBox.append(h('p', 'text-secondary small', 'Aún no hay salsas activas. Agrégalas en Categorías.'));
+    regBox.append(h('div', 'd-flex flex-wrap gap-2 mb-3', null, salsas.map(s => {
+      const b = h('button', 'chip' + (st.salsa === s.id ? ' on' : ''), s.name);
+      b.onclick = () => { st.salsa = s.id; render(); };
+      return b;
+    })));
+    regBox.append(h('div', 'small text-secondary mb-2', '¿Cuántos salieron? (Elige un botón o escribe la cantidad)'));
+    const guardarOlla = q => seguro(async () => {
+      q = Number(q);
+      if (!st.salsa) return toast('Primero elige la salsa.', false);
+      if (!Number.isInteger(q) || q < 1 || q > 500) return toast('La cantidad debe ser un número entero de 1 a 500.', false);
+      if (!await confirmar(`¿Registrar ${q} tamales de ${salsaName(st.salsa)}?`)) return;
+      const { error } = await sb.from('batches').insert({ salsa_id: st.salsa, qty: q });
+      if (error) throw error;
+      toast('Tamales registrados correctamente');
+      st.salsa = null;
+      st.draft.custom = '';
+      render();
+    });
+    const cantRow = h('div', 'd-flex flex-wrap gap-2 mb-3', null, byKind('cantidad').map(c => {
+      const b = h('button', 'btn btn-acc btn-lg', String(c.value));
+      b.onclick = () => guardarOlla(c.value);
+      return b;
+    }));
+    const n = h('input', 'form-control');
+    n.type = 'number'; n.min = 1; n.max = 500; n.step = 1; n.inputMode = 'numeric';
+    n.placeholder = 'Otra cantidad';
+    n.value = st.draft.custom || '';
+    n.oninput = () => { st.draft.custom = n.value; };
+    const goInp = h('button', 'btn btn-outline-secondary', null, [ic('pencil'), 'Ingresar']);
+    goInp.onclick = () => guardarOlla(n.value);
+    const customGroup = h('div', 'input-group', null, [n, goInp]);
+    regBox.append(cantRow, customGroup);
+
+    box.replaceChildren(
+      h('h5', null, 'Tamales'),
+      regBox,
+      h('hr', 'my-3'),
+      h('h6', 'fw-bold', 'Historial e inventario'),
+      filtroFechas(T),
+      h('div', 'card p-3 mb-3 text-center', null, [
+        h('div', 'big', total.toLocaleString('es-MX')),
+        h('div', null, T.desde === T.hasta ? `tamales hechos el ${T.desde}` : `tamales hechos del ${T.desde} al ${T.hasta}`)
+      ]),
+      h('h6', null, 'Por sabor e inventario actual')
+    );
+
     const row = h('div', 'row g-2 mb-3');
     res.forEach(s => {
       const falta = Math.max(0, s.pendiente - s.stock);
-      row.append(h('div', 'col-6 col-md-4', null, [h('div', 'card p-2 text-center h-100', null, [h('strong', null, s.name), h('div', 'fs-3 fw-bold', String(hechos.get(s.salsa_id) || 0)), h('small', null, 'hechos en el rango'),
-        h('small', 'text-secondary', `Disponibles ahora: ${s.stock}`), h('small', 'text-secondary', `Por surtir: ${s.pendiente}`), falta > 0 ? h('small', 'text-danger fw-bold', `Faltan ${falta}`) : h('small', 'text-success', 'Alcanza')])]));
+      row.append(h('div', 'col-6 col-md-4', null, [h('div', 'card p-2 text-center h-100', null, [
+        h('strong', null, s.name),
+        h('div', 'fs-3 fw-bold', String(hechos.get(s.salsa_id) || 0)),
+        h('small', null, 'hechos en el rango'),
+        h('small', 'text-secondary', `Disponibles ahora: ${s.stock}`),
+        h('small', 'text-secondary', `Por surtir: ${s.pendiente}`),
+        falta > 0 ? h('small', 'text-danger fw-bold', `Faltan ${falta}`) : h('small', 'text-success', 'Alcanza')
+      ])]));
     });
+
     box.append(row, h('h6', null, 'Ollas del rango'));
     if (!r.data.length) box.append(h('p', 'text-secondary', 'No hay ollas registradas en estas fechas.'));
     r.data.slice(0, 80).forEach(b => {
-      const line = h('div', 'card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap', null, [h('span', 'flex-grow-1', `${fdt(b.created_at)} · ${b.qty} de ${salsaName(b.salsa_id)} · ${staffName(b.created_by)}`)]);
-      if (canKitchen()) {
-        const e = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('pencil')]); e.title = 'Corregir';
-        e.onclick = () => seguro(async () => {
-          const f = await formModal('Corregir olla', [{ key: 'q', label: 'Cantidad de tamales', type: 'number', min: 1, mode: 'numeric', value: b.qty },
-            { key: 's', label: 'Sabor', options: byKind('salsa').map(s => [String(s.id), s.name]), value: String(b.salsa_id) }], 'Guardar');
-          if (!f) return; const q = Number(f.q);
-          if (!Number.isInteger(q) || q < 1 || q > 500) return toast('La cantidad debe ser un entero de 1 a 500.', false);
-          if (!await confirmar(`¿Cambiar esta olla a ${q} de ${salsaName(Number(f.s))}?`)) return;
-          const { error } = await sb.from('batches').update({ qty: q, salsa_id: Number(f.s) }).eq('id', b.id); errDb(error); toast('Olla corregida'); render();
-        });
-        const d = h('button', 'btn btn-sm btn-outline-danger', null, [ic('trash')]); d.title = 'Eliminar';
-        d.onclick = () => seguro(async () => { if (!await confirmar('¿Eliminar esta olla? Se descontará del inventario.')) return;
-          const { error } = await sb.from('batches').delete().eq('id', b.id); errDb(error); toast('Olla eliminada'); render(); });
-        line.append(e, d);
-      }
+      const line = h('div', 'card p-2 mb-2 d-flex flex-row align-items-center gap-2 flex-wrap', null, [
+        h('span', 'flex-grow-1', `${fdt(b.created_at)} · ${b.qty} de ${salsaName(b.salsa_id)} · ${staffName(b.created_by)}`)
+      ]);
+      const e = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('pencil'), 'Corregir']);
+      e.title = 'Editar cantidad o salsa';
+      e.onclick = () => seguro(async () => {
+        const f = await formModal('Corregir olla', [
+          { key: 'q', label: 'Cantidad de tamales', type: 'number', min: 1, max: 500, mode: 'numeric', value: b.qty },
+          { key: 's', label: 'Sabor', options: byKind('salsa').map(s => [String(s.id), s.name]), value: String(b.salsa_id) }
+        ], 'Guardar');
+        if (!f) return;
+        const q = Number(f.q);
+        if (!Number.isInteger(q) || q < 1 || q > 500) return toast('La cantidad debe ser un entero de 1 a 500.', false);
+        if (!await confirmar(`¿Cambiar esta olla a ${q} de ${salsaName(Number(f.s))}?`)) return;
+        const { error } = await sb.from('batches').update({ qty: q, salsa_id: Number(f.s) }).eq('id', b.id);
+        errDb(error);
+        toast('Olla corregida');
+        render();
+      });
+      const d = h('button', 'btn btn-sm btn-outline-danger', null, [ic('trash'), 'Eliminar']);
+      d.title = 'Eliminar olla';
+      d.onclick = () => seguro(async () => {
+        if (!await confirmar(`¿Eliminar este registro de ${b.qty} tamales de ${salsaName(b.salsa_id)}? Se descontará del inventario.`)) return;
+        const { error } = await sb.from('batches').delete().eq('id', b.id);
+        errDb(error);
+        toast('Olla eliminada');
+        render();
+      });
+      line.append(e, d);
       box.append(line);
     });
   });
@@ -825,8 +998,9 @@ function ticketLines(o, cat) {
   const L = [], add = (t, b) => L.push({ t, b: !!b }), cu = o.customers, pg = sum(o.payments), raya = '-'.repeat(TW);
   add(tctr((APP_CONFIG.BUSINESS_NAME || 'Tamales').toUpperCase()), 1); add(tctr('Comprobante de compra')); add(raya);
   add(`Pedido #${o.id}`); add(fdt(o.created_at)); add('Tipo: ' + KIND[o.kind]); if (o.delivery_date) add('Entrega: ' + fechaHoraCorta(o.delivery_date, o.delivery_time)); if (o.created_by && staffName(o.created_by) !== '—') add('Atendió: ' + staffName(o.created_by));
+  const resp = o.responsible_id || o.created_by; if (resp && staffName(resp) !== '—') add('Responsable: ' + staffName(resp));
   if (cu) { twrap('Cliente: ' + cu.name).forEach(x => add(x)); if (o.kind !== 'mostrador') twrap('Entrega: ' + dirCliente(cu)).forEach(x => add(x)); }
-  if (o.delivery) add('Envío: ' + DL[o.delivery]);
+  if (o.delivery) add('Entrega: ' + DL[o.delivery]);
   add(raya);
   lineas(o, cat).forEach(l => { add(tpad(l.txt, $$(l.total))); if (l.sub) twrap('  ' + l.sub).forEach(x => add(x)); });
   add(raya); add(tpad('TOTAL', $$(o.total)), 1);
@@ -916,14 +1090,8 @@ function barras(titulo, filas, fmt = String, max = 8) {
   });
   return card;
 }
-async function elegirRepartidor(o) {
-  const reps = staffArr().filter(x => x.cargo === 'repartidor' && x.active);
-  if (!reps.length) { toast('No hay repartidores activos. Crea un usuario con cargo Repartidor.', false); return null; }
-  if (reps.length === 1) return (await confirmar(`¿Asignar el pedido #${o.id} a ${reps[0].full_name}?`)) ? reps[0].id : null;
-  const f = await formModal(`¿Quién reparte el pedido #${o.id}?`, [{ key: 'u', label: 'Repartidor', options: [['', '— Elige un repartidor —'], ...reps.map(x => [x.id, x.full_name])], value: o.assigned_to || '' }], 'Asignar');
-  if (!f) return null; if (!f.u) { toast('Elige un repartidor.', false); return null; } return f.u;
-}
-async function asignar(o) { const u = await elegirRepartidor(o); if (!u) return; await rpc('assign_order', { p_order: o.id, p_user: u }); toast('Repartidor asignado'); render(); }
+async function elegirRepartidor() { return null; }
+async function asignar() { return; }
 
 /* ---------- Excel, bitácora y exportar antes de borrar ---------- */
 const logEv = (a, d) => sb.rpc('log_event', { p_action: a, p_detail: d }).then(() => {}, () => {});
@@ -945,8 +1113,8 @@ async function borrarConExcel(t, l, dias) {
   } else {
     const [cat, rows] = await Promise.all([getCat(), traer(() => sb.from('orders').select(ORD).in('status', ['entregado', 'cancelado']).lt('created_at', corte).order('created_at').order('id'))]);
     const ok = rows.filter(o => o.status === 'cancelado' || Number(o.total) - sum(o.payments) <= 0.001);
-    filas = [['#', 'Fecha', 'Cliente', 'Tipo', 'Estado', 'Fecha de entrega', 'Hora de entrega', 'Registró', 'Repartidor', 'Entregó', 'Productos', 'Pagos', 'Total', 'Pagado']].concat(ok.map(o => [o.id, fdt(o.created_at),
-      safe(o.customers ? o.customers.name : 'Mostrador'), KIND[o.kind], etiqueta(o)[0], o.delivery_date || '', o.delivery_time ? o.delivery_time.slice(0, 5) : '', staffName(o.created_by), staffName(o.assigned_to), staffName(o.delivered_by),
+    filas = [['#', 'Fecha', 'Cliente', 'Tipo', 'Estado', 'Fecha de entrega', 'Hora de entrega', 'Registró', 'Responsable', 'Entregó', 'Productos', 'Pagos', 'Total', 'Pagado']].concat(ok.map(o => [o.id, fdt(o.created_at),
+      safe(o.customers ? o.customers.name : 'Mostrador'), KIND[o.kind], etiqueta(o)[0], o.delivery_date || '', o.delivery_time ? o.delivery_time.slice(0, 5) : '', staffName(o.created_by), staffName(o.responsible_id || o.created_by), staffName(o.delivered_by),
       safe(lineas(o, cat).map(x => x.txt).join('; ')), o.payments.map(p => `${p.method} ${p.amount}`).join('; '), Number(o.total), sum(o.payments)])); nombre = 'ventas_eliminadas';
   }
   const n = filas.length - 1;
@@ -988,43 +1156,51 @@ function pagoUI(S, onChange) {
   draw(); box.append(met, body); return box;
 }
 
-/* ---------- Apartados y Envíos (derivados del estado de pago) ---------- */
+/* ---------- Apartados y Entregas (derivados del estado de pago) ---------- */
 const saldoDe = o => Number(o.total) - sum(o.payments);
-function listaPedidos(titulo, vacio, filtro, conRepartidor) {
+function listaPedidos(titulo, vacio, filtro) {
   return lazy(async box => {
     const [cat, r] = await Promise.all([getCat(), sb.from('orders').select(ORD).in('status', ['pendiente', 'listo']).order('delivery_date', { ascending: true, nullsFirst: false }).order('created_at').limit(300)]);
     if (r.error) throw r.error;
-    const F = st.draft, reps = staffArr().filter(x => x.cargo === 'repartidor'); box.replaceChildren(h('h5', null, titulo));
-    if (conRepartidor && st.me.cargo !== 'repartidor') {
-      const sel = h('select', 'form-select w-auto mb-3');
-      [['', 'Todos los repartidores'], ['none', 'Sin asignar'], ...reps.map(x => [x.id, x.full_name])].forEach(([v, l]) => sel.append(Object.assign(h('option', null, l), { value: v })));
-      sel.value = F.rep || ''; sel.onchange = () => { F.rep = sel.value; render(); }; box.append(sel);
-    }
-    const data = r.data.filter(filtro).filter(o => !conRepartidor || st.me.cargo === 'repartidor' || !F.rep || (F.rep === 'none' ? !o.assigned_to : o.assigned_to === F.rep));
+    const F = st.draft;
+    const todos = staffArr();
+    box.replaceChildren(h('h5', null, titulo));
+
+    const sel = h('select', 'form-select w-auto mb-3');
+    [['', 'Responsable: todos'], ...todos.map(x => [x.id, x.full_name])].forEach(([v, l]) => sel.append(Object.assign(h('option', null, l), { value: v })));
+    sel.value = F.resp || '';
+    sel.onchange = () => { F.resp = sel.value; render(); };
+    box.append(sel);
+
+    const data = r.data.filter(filtro).filter(o => !F.resp || (o.responsible_id ? o.responsible_id === F.resp : o.created_by === F.resp));
     data.sort((a, b) => ((a.delivery_date || '9999') + ' ' + (a.delivery_time || '99:99')).localeCompare((b.delivery_date || '9999') + ' ' + (b.delivery_time || '99:99')));
     const tam = data.reduce((s, o) => s + (o.order_items || []).reduce((x, i) => x + i.qty, 0), 0);
-    if (!data.length) box.append(h('p', 'text-secondary', vacio)); else box.append(h('p', 'small text-secondary', `${data.length} pedidos`));
+    if (!data.length) box.append(h('p', 'text-secondary', vacio)); else box.append(h('p', 'small text-secondary', `${data.length} pedidos · ${tam.toLocaleString('es-MX')} tamales`));
     data.forEach(o => box.append(pedidoCard(o, cat)));
   });
 }
-// A domicilio -> Envíos cuando ya está pagado, está listo o ya va en camino. Todo lo demás (sucursal o con saldo sin terminar) -> Apartados.
+// A domicilio -> Entregas cuando ya está pagado, está listo o ya va en camino. Todo lo demás (sucursal o con saldo sin terminar) -> Apartados.
 const abierto = o => ['pendiente', 'listo'].includes(o.status);
 const enEnvios = o => abierto(o) && o.kind === 'envio' && (saldoDe(o) <= 0.001 || o.status === 'listo' || o.delivery === 'en_camino');
 const enApartados = o => abierto(o) && !enEnvios(o);
-const envios = () => listaPedidos('Envíos a domicilio', 'No hay envíos por atender.', enEnvios, true);
+const envios = () => listaPedidos('Entregas a domicilio', 'No hay entregas por atender.', enEnvios);
 function apartados() {
   return lazy(async box => {
     const [cat, r] = await Promise.all([getCat(), sb.from('orders').select(ORD).in('status', ['pendiente', 'listo']).order('delivery_date', { ascending: true, nullsFirst: false }).order('created_at').limit(300)]);
     if (r.error) throw r.error;
-    const A = st.af || (st.af = { q: '', pago: '', est: '', ent: '', fecha: '' }), base = r.data.filter(enApartados), hoy = hoyStr();
+    const A = st.af || (st.af = { q: '', pago: '', est: '', ent: '', fecha: '', resp: '' }), base = r.data.filter(enApartados), hoy = hoyStr();
     const qin = h('input', 'form-control'); qin.placeholder = 'Buscar por # de pedido, cliente o celular…'; qin.maxLength = 60; qin.value = A.q;
     const lista = h('div'), cnt = h('p', 'small text-secondary');
+    const todos = staffArr();
     const sel = (opts, key) => { const s = h('select', 'form-select form-select-sm w-auto'); opts.forEach(([v, l]) => s.append(Object.assign(h('option', null, l), { value: v }))); s.value = A[key]; s.onchange = () => { A[key] = s.value; if (key === 'ent') { A.fecha = ''; fd.value = ''; } pinta(); }; return s; };
     const fd = h('input', 'form-control form-control-sm w-auto'); fd.type = 'date'; fd.value = A.fecha; fd.title = 'Fecha de entrega exacta'; fd.onchange = () => { A.fecha = fd.value; if (A.fecha) { A.ent = ''; render(); return; } pinta(); };
     const limpiar = h('button', 'btn btn-sm btn-outline-secondary', null, [ic('x-lg'), 'Limpiar']); limpiar.onclick = () => { st.af = null; render(); };
     const filtros = h('div', 'd-flex flex-wrap gap-2 align-items-center mb-3', null, [
-      sel([['', 'Pago: todos'], ['cobrar', 'Sin pago (X COBRAR)'], ['abonado', 'Abonado'], ['pagado', 'Pagado']], 'pago'), sel([['', 'Estado: todos'], ['pendiente', 'Pendiente'], ['listo', 'Listo']], 'est'),
-      sel([['', 'Entrega: cualquier fecha'], ['hoy', 'Hoy'], ['vencidos', 'Vencidos'], ['semana', 'Próximos 7 días'], ['sin', 'Sin fecha']], 'ent'), fd, limpiar]);
+      sel([['', 'Pago: todos'], ['cobrar', 'Sin pago (X COBRAR)'], ['abonado', 'Abonado'], ['pagado', 'Pagado']], 'pago'),
+      sel([['', 'Estado: todos'], ['pendiente', 'Pendiente'], ['listo', 'Listo']], 'est'),
+      sel([['', 'Responsable: todos'], ...todos.map(x => [x.id, x.full_name])], 'resp'),
+      sel([['', 'Entrega: cualquier fecha'], ['hoy', 'Hoy'], ['vencidos', 'Vencidos'], ['semana', 'Próximos 7 días'], ['sin', 'Sin fecha']], 'ent'),
+      fd, limpiar]);
     const pinta = () => {
       A.q = qin.value; const t = A.q.trim().toLowerCase().replace(/^#/, '');
       const data = base.filter(o => {
@@ -1032,6 +1208,7 @@ function apartados() {
         if (t && !(String(o.id) === t || String(cu.name || '').toLowerCase().includes(t) || String(cu.phone || '').includes(t))) return false;
         if (A.pago === 'cobrar' && pg > 0) return false; if (A.pago === 'abonado' && !(pg > 0 && saldoDe(o) > 0.001)) return false; if (A.pago === 'pagado' && saldoDe(o) > 0.001) return false;
         if (A.est && o.status !== A.est) return false;
+        if (A.resp && (o.responsible_id ? o.responsible_id !== A.resp : o.created_by !== A.resp)) return false;
         if (A.ent === 'hoy' && d !== hoy) return false; if (A.ent === 'vencidos' && !(d && d < hoy)) return false;
         if (A.ent === 'semana' && !(d && d >= hoy && d <= addDias(hoy, 7))) return false; if (A.ent === 'sin' && d) return false;
         if (A.fecha && d !== A.fecha) return false;
@@ -1060,7 +1237,7 @@ const ventas = () => {
 };
 function calendario() {
   return lazy(async box => {
-    const K = st.cal || (st.cal = { vista: 'mes', fecha: hoyStr(), sel: hoyStr() }), hoy = hoyStr(), pend = ['pendiente', 'listo'], cook = st.me.cargo === 'cocinero';
+    const K = st.cal || (st.cal = { vista: 'mes', fecha: hoyStr(), sel: hoyStr(), resp: '' }), hoy = hoyStr(), pend = ['pendiente', 'listo'];
     let a, b;
     if (K.vista === 'dia') a = b = K.fecha; else if (K.vista === 'semana') { a = lunesDe(K.fecha); b = addDias(a, 6); }
     else if (K.vista === 'mes') { a = lunesDe(K.fecha.slice(0, 8) + '01'); b = addDias(a, 41); } else { a = hoy; b = addDias(hoy, 30); }
@@ -1073,29 +1250,35 @@ function calendario() {
     const mover = k => { if (K.vista === 'mes') { const d = new Date(K.fecha.slice(0, 8) + '01T12:00:00'); d.setMonth(d.getMonth() + k); K.fecha = ymd(d); } else K.fecha = addDias(K.fecha, K.vista === 'semana' ? 7 * k : k); K.sel = K.fecha; render(); };
     const titulo = K.vista === 'mes' ? new Date(K.fecha.slice(0, 8) + '01T12:00:00').toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })
       : K.vista === 'semana' ? `${fechaCorta(a)} al ${fechaCorta(b)}` : K.vista === 'dia' ? fechaLarga(K.fecha) : 'Próximos 30 días';
+
+    const todos = staffArr();
     const nav = h('div', 'd-flex flex-wrap gap-2 align-items-center mb-3');
     [['dia', 'Día'], ['semana', 'Semana'], ['mes', 'Mes'], ['agenda', 'Agenda']].forEach(([k, l]) => { const c = h('button', 'chip' + (K.vista === k ? ' on' : ''), l); c.onclick = () => { K.vista = k; render(); }; nav.append(c); });
     if (K.vista !== 'agenda') {
       const p = h('button', 'btn btn-sm btn-outline-secondary', null, [h('i', 'bi bi-chevron-left')]), s = h('button', 'btn btn-sm btn-outline-secondary', null, [h('i', 'bi bi-chevron-right')]), t = h('button', 'btn btn-sm btn-outline-secondary', 'Hoy');
       p.onclick = () => mover(-1); s.onclick = () => mover(1); t.onclick = () => { K.fecha = K.sel = hoy; render(); }; nav.append(p, t, s);
     }
+    const selResp = h('select', 'form-select form-select-sm w-auto ms-auto');
+    [['', 'Responsable: todos'], ...todos.map(x => [x.id, x.full_name])].forEach(([v, l]) => selResp.append(Object.assign(h('option', null, l), { value: v })));
+    selResp.value = K.resp || '';
+    selResp.onchange = () => { K.resp = selResp.value; render(); };
+    nav.append(selResp);
+
+    const totalPedidosFiltrados = r.data.filter(o => !K.resp || (o.responsible_id ? o.responsible_id === K.resp : o.created_by === K.resp));
     const resumen = h('div', 'card p-3 mb-3 d-flex flex-row flex-wrap align-items-center gap-3', null, [h('strong', 'text-capitalize flex-grow-1', titulo),
-      h('span', 'acc fw-semibold', `${r.data.length} pedidos · ${tam(r.data).toLocaleString('es-MX')} tamales por entregar`), ...(v.count ? [badge(`${v.count} vencidos`, 'danger')] : [])]);
+      h('span', 'acc fw-semibold', `${totalPedidosFiltrados.length} pedidos · ${tam(totalPedidosFiltrados).toLocaleString('es-MX')} tamales por entregar`), ...(v.count ? [badge(`${v.count} vencidos`, 'danger')] : [])]);
     const diaCard = (f, os) => {
       const c = h('div', 'card p-3 mb-3' + (f === hoy ? ' border-2' : '')), sab = new Map();
-      const sorted = [...os].sort((x, y) => (x.delivery_time || '99:99').localeCompare(y.delivery_time || '99:99'));
+      const filtrados = K.resp ? os.filter(o => (o.responsible_id ? o.responsible_id === K.resp : o.created_by === K.resp)) : os;
+      const sorted = [...filtrados].sort((x, y) => (x.delivery_time || '99:99').localeCompare(y.delivery_time || '99:99'));
       sorted.forEach(o => (o.order_tamales || []).forEach(t => sab.set(t.salsa_id, (sab.get(t.salsa_id) || 0) + t.qty)));
       c.append(h('div', 'd-flex justify-content-between flex-wrap gap-2', null, [h('strong', 'text-capitalize', fechaLarga(f) + (f === hoy ? ' (hoy)' : '')), h('span', f < hoy ? 'text-danger fw-semibold' : 'acc fw-semibold', `${sorted.length} pedidos · ${tam(sorted).toLocaleString('es-MX')} tamales`)]));
       if (sab.size) c.append(h('div', 'small text-secondary mb-1', [...sab].map(([id, q]) => `${salsaName(id)}: ${q}`).join(' · ')));
       if (!sorted.length) c.append(h('div', 'small text-secondary', 'Sin entregas programadas.'));
       sorted.forEach(o => {
-        if (cook) {   // el cocinero solo ve qué hay que preparar: sin dinero ni botones
-          c.append(h('div', 'mt-2 pt-2 border-top', null, [h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${o.customers ? o.customers.name : 'Cliente'}${o.delivery_time ? ' · ' + horaMilitar(o.delivery_time) : ''}`), h('span', null, `${tam([o])} tamales`)]),
-            ...lineas(o, cat).map(l => h('div', 'small', l.txt + (l.sub ? ` (${l.sub})` : ''))), h('div', 'mt-1', null, [badge(o.status === 'listo' ? 'Listo' : 'Por preparar', o.status === 'listo' ? 'info' : 'warning'), ...(o.delivery_time ? [badge('Hora: ' + horaMilitar(o.delivery_time), 'dark')] : [])])])); return;
-        }
         const [lab, col] = etiqueta(o), bt = h('button', 'btn btn-sm btn-outline-secondary w-100 text-start mt-2', null, [
           h('div', 'd-flex justify-content-between gap-2', null, [h('strong', null, `#${o.id} · ${o.customers ? o.customers.name : 'Mostrador'}`), h('span', null, `${tam([o])} tamales`)]),
-          h('div', 'mt-1 d-flex flex-wrap gap-1 align-items-center', null, [badge(lab, col), ...(o.delivery_time ? [badge(horaMilitar(o.delivery_time), 'primary')] : []), ...(o.status === 'listo' ? [badge('Listo', 'info')] : []), ...(o.assigned_to ? [badge('Reparte: ' + staffName(o.assigned_to), 'dark')] : [])])]);
+          h('div', 'mt-1 d-flex flex-wrap gap-1 align-items-center', null, [badge(lab, col), ...(o.delivery_time ? [badge(horaMilitar(o.delivery_time), 'primary')] : []), ...(o.status === 'listo' ? [badge('Listo', 'info')] : []), badge('Resp: ' + staffName(o.responsible_id || o.created_by), 'secondary')])]);
         bt.onclick = () => verDetalle(o, cat); c.append(bt);
       });
       return c;
@@ -1107,9 +1290,9 @@ function calendario() {
     else {
       const g = h('div', 'cal mb-3'); ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].forEach(d => g.append(h('div', 'cal-h', d)));
       for (let i = 0; i < 42; i++) {
-        const f = addDias(a, i), os = por.get(f) || [], otro = f.slice(0, 7) !== K.fecha.slice(0, 7), t = tam(os);
-        const c = h('button', 'cal-d' + (otro ? ' otro' : '') + (f === hoy ? ' hoy' : '') + (f === K.sel ? ' sel' : '') + (os.length && f < hoy ? ' venc' : ''), null,
-          [h('div', 'cal-n', String(Number(f.slice(8)))), ...(os.length ? [h('div', 'cal-t', t.toLocaleString('es-MX')), h('div', 'cal-p', os.length + (os.length === 1 ? ' ped.' : ' peds.'))] : [])]);
+        const f = addDias(a, i), os = por.get(f) || [], filtrados = K.resp ? os.filter(o => (o.responsible_id ? o.responsible_id === K.resp : o.created_by === K.resp)) : os, otro = f.slice(0, 7) !== K.fecha.slice(0, 7), t = tam(filtrados);
+        const c = h('button', 'cal-d' + (otro ? ' otro' : '') + (f === hoy ? ' hoy' : '') + (f === K.sel ? ' sel' : '') + (filtrados.length && f < hoy ? ' venc' : ''), null,
+          [h('div', 'cal-n', String(Number(f.slice(8)))), ...(filtrados.length ? [h('div', 'cal-t', t.toLocaleString('es-MX')), h('div', 'cal-p', filtrados.length + (filtrados.length === 1 ? ' ped.' : ' peds.'))] : [])]);
         c.onclick = () => { K.sel = f; render(); }; g.append(c);
       }
       box.append(g, diaCard(K.sel, por.get(K.sel) || []));

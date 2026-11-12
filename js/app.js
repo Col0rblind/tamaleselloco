@@ -2,7 +2,7 @@
 
 const sb = supabase.createClient(APP_CONFIG.SUPABASE_URL, APP_CONFIG.SUPABASE_ANON_KEY);
 const app = document.getElementById('app');
-const st = { me:null, cats:[], batches:[], salsa:null, view:'cocina', users:[], resets:[], draft:{}, cart:null, range:'hoy' };
+const st = { me:null, cats:[], batches:[], salsa:null, view:'caja', users:[], resets:[], draft:{}, cart:null, range:'hoy' };
 
 // Construcción de DOM sin innerHTML: el texto de usuarios nunca se interpreta como HTML (anti-XSS)
 function h(tag, cls, txt, kids){ const e=document.createElement(tag); if(cls) e.className=cls; if(Array.isArray(txt)){ kids=txt; txt=null; } if(txt!=null) e.textContent=txt; (kids||[]).forEach(k=>e.append(k)); return e; }
@@ -83,7 +83,7 @@ async function loadAll(){
 let ch;
 function subscribe(){
   if(ch) sb.removeChannel(ch);
-  ch=sb.channel('live').on('postgres_changes',{event:'*',schema:'public'},()=>seguro(async()=>{await loadAll(); if(st.view!=='cocina'&&!document.querySelector('.ov')) render();})).subscribe();
+  ch=sb.channel('live').on('postgres_changes',{event:'*',schema:'public'},()=>seguro(async()=>{await loadAll(); if(!document.querySelector('.ov')) render();})).subscribe();
 }
 const byKind = (k, all = false) => st.cats.filter(c => c.kind === k && (all || c.active !== false));
 const salsaName = id => (st.cats.find(c=>c.id===id)||{}).name||'?';
@@ -91,8 +91,8 @@ const salsaName = id => (st.cats.find(c=>c.id===id)||{}).name||'?';
 /* ---------- Vistas ---------- */
 function render(){
   app.replaceChildren(); document.body.classList.remove('login-bg');
-  const ALL={cocina:['fire','Cocina'],tamales:['basket3','Tamales'],caja:['cash-coin','Caja'],envios:['truck','Envíos'],apartados:['bookmark-star','Apartados'],clientes:['person-lines-fill','Clientes'],ventas:['receipt','Ventas'],catalogo:['journal-richtext','Catálogo'],cats:['tags','Categorías'],users:['people','Usuarios'],storage:['hdd','Almacenamiento'],matriz:['shield-check','Matriz'],calendario:['calendar3','Calendario']};
-  const allow=isAdmin()?Object.keys(ALL):(({cajero:['caja','envios','apartados','clientes','catalogo'],cocinero:['cocina','tamales','calendario'],repartidor:['envios'],general:['cocina','tamales','caja','envios','apartados','clientes','ventas','calendario','catalogo']})[st.me.cargo]||['catalogo']);
+  const ALL={tamales:['basket3','Tamales'],caja:['cash-coin','Caja'],envios:['truck','Entregas'],apartados:['bookmark-star','Apartados'],clientes:['person-lines-fill','Clientes'],ventas:['receipt','Ventas'],catalogo:['journal-richtext','Catálogo'],cats:['tags','Categorías'],users:['people','Usuarios'],storage:['hdd','Almacenamiento'],matriz:['shield-check','Matriz'],calendario:['calendar3','Calendario']};
+  const allow=isAdmin()?Object.keys(ALL):(({cajero:['caja','envios','apartados','clientes','catalogo'],general:['tamales','caja','envios','apartados','clientes','ventas','calendario','catalogo']})[st.me.cargo]||['tamales','catalogo']);
   if(!allow.includes(st.view)) st.view=allow[0];
   const go=v=>{st.view=v;render();window.scrollTo(0,0);};
   const logout=async()=>{ if(await confirmar('¿Cerrar sesión?')){ try{ await sb.rpc('log_event',{p_action:'logout',p_detail:null}); }catch(e){}
@@ -101,7 +101,7 @@ function render(){
   const mkTheme=()=>{ const t=h('select','form-select form-select-sm theme-sel');
     [['claro','Claro'],['oscuro','Oscuro'],['muertos','Día de Muertos'],['patrio','Fiestas Patrias'],['navidad','Navidad']].forEach(([v,l])=>{const o=h('option',null,l);o.value=v;t.append(o)});
     t.value=document.documentElement.dataset.theme; t.onchange=()=>setTheme(t.value); return t; };
-  const mainKeys=['cocina','tamales','caja','envios','apartados','clientes','ventas','calendario','catalogo'].filter(k=>allow.includes(k)), admKeys=['cats','users','storage','matriz'].filter(k=>allow.includes(k));
+  const mainKeys=['caja','envios','apartados','tamales','clientes','ventas','calendario','catalogo'].filter(k=>allow.includes(k)), admKeys=['cats','users','storage','matriz'].filter(k=>allow.includes(k));
   const link=(k,cls)=>{const b=h('button',cls+(st.view===k?' on':''),null,[ic(ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.title=ALL[k][1]; b.onclick=()=>go(k); return b;};
   const links=mainKeys.map(k=>link(k,'navlink'));
   if(admKeys.length){
@@ -114,7 +114,7 @@ function render(){
   const top=h('header','topbar no-print',null,[h('div','topbar-in',null,[h('div','brand',null,[h('i','bi bi-fire'),h('span',null,APP_CONFIG.BUSINESS_NAME||'Tamales')]),
     h('span','sect',ALL[st.view][1]),h('nav','topnav',null,links),h('div','topright',null,[mkTheme(),h('span','who d-none d-xl-inline',st.me.full_name),out])])]);
   // Navegación inferior (móvil): 4 principales + "Más"
-  const prio=['caja','envios','apartados','tamales','cocina','calendario','ventas','clientes','catalogo','cats','users','storage','matriz'].filter(k=>allow.includes(k));
+  const prio=['caja','envios','apartados','tamales','calendario','ventas','clientes','catalogo','cats','users','storage','matriz'].filter(k=>allow.includes(k));
   const prim=prio.length<=5?prio.slice(0,5):prio.slice(0,4), rest=prio.filter(k=>!prim.includes(k));
   const masSheet=()=>{
     const ov=h('div','ov sheet'), bx=h('div','box text-start'), close=()=>ov.remove(); ov.onclick=e=>{if(e.target===ov)close();};
@@ -124,34 +124,10 @@ function render(){
   };
   const items=prim.map(k=>{const b=h('button','bn'+(st.view===k?' on':''),null,[h('i','bi bi-'+ALL[k][0]),h('span',null,ALL[k][1]),...badgeFor(k)]); b.onclick=()=>go(k); return b;});
   const mas=h('button','bn'+(rest.includes(st.view)?' on':''),null,[h('i','bi bi-grid'),h('span',null,'Más'),...(rest.includes('users')&&st.resets.length?[h('span','badge bg-danger',String(st.resets.length))]:[])]); mas.onclick=masSheet; items.push(mas);
-  const V={cocina,tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento,matriz,calendario};
-  app.append(top,h('main','container pt-3 pb-5 pb-md-3',null,[(V[st.view]||cocina)()]),h('nav','bottom-nav no-print',null,items));
+  const V={tamales,caja,envios,apartados,clientes,ventas,catalogo,cats,users:usuarios,storage:almacenamiento,matriz,calendario};
+  app.append(top,h('main','container pt-3 pb-5 pb-md-3',null,[(V[st.view]||caja)()]),h('nav','bottom-nav no-print',null,items));
 }
 function setTheme(t){ const r=document.documentElement; r.dataset.theme=t; r.dataset.bsTheme=['oscuro','muertos','navidad'].includes(t)?'dark':'light'; localStorage.setItem('tema',t); }
-
-function cocina(){
-  const box=h('div','card p-3');
-  box.append(h('h5',null,'¿De qué salsa salió la olla?'));
-  const salsas=byKind('salsa');
-  if(!salsas.length) box.append(h('p','text-secondary','Aún no hay salsas. Pídele al administrador que las agregue en Categorías.'));
-  box.append(h('div','d-flex flex-wrap gap-2 mb-3',null,salsas.map(s=>{
-    const b=h('button','chip'+(st.salsa===s.id?' on':''),s.name); b.onclick=()=>{st.salsa=s.id;render()}; return b;})));
-  box.append(h('h5',null,'¿Cuántos salieron?'));
-  const guardar=q=>seguro(async()=>{
-    q=Number(q);
-    if(!st.salsa) return toast('Primero elige la salsa.',false);
-    if(!Number.isInteger(q)||q<1||q>500) return toast('La cantidad debe ser un número entero de 1 a 500.',false);
-    if(!await confirmar(`¿Registrar ${q} tamales de ${salsaName(st.salsa)}?`)) return;
-    const {error}=await sb.from('batches').insert({salsa_id:st.salsa,qty:q}); if(error) throw error;
-    toast('Registrado'); st.salsa=null; st.draft.custom=''; render();
-  });
-  box.append(h('div','d-flex flex-wrap gap-2 mb-3',null,byKind('cantidad').map(c=>{
-    const b=h('button','btn btn-acc btn-lg',String(c.value)); b.onclick=()=>guardar(c.value); return b;})));
-  const n=h('input','form-control'); n.type='number'; n.min=1; n.max=500; n.step=1; n.inputMode='numeric'; n.placeholder='Otra cantidad'; n.value=st.draft.custom||''; n.oninput=()=>{st.draft.custom=n.value};
-  const go=h('button','btn btn-outline-secondary',null,[ic('pencil'),'Ingresar']); go.onclick=()=>guardar(n.value);
-  box.append(h('div','input-group',null,[n,go]));
-  return box;
-}
 
 function dashboard(){
   const total=st.batches.reduce((a,b)=>a+b.qty,0), per={};
@@ -241,7 +217,7 @@ function cats(){
           activas.forEach(c => {
             // Botón Deshabilitar
             const btnOff = h('button', 'btn btn-sm btn-outline-warning ms-2 p-0 px-1 border-0', null, [ic('eye-slash')]);
-            btnOff.title = 'Deshabilitar (no aparecerá en ventas ni cocina)';
+            btnOff.title = 'Deshabilitar (no aparecerá en ventas ni tamales)';
             btnOff.onclick = () => seguro(async () => {
               if (!await confirmar(`¿Deshabilitar "${c.name}"?\n\nYa no se podrá seleccionar para nuevos pedidos o lotes, pero se conservará su historial intacto.`)) return;
               const { error } = await sb.from('categories').update({ active: false }).eq('id', c.id);
@@ -286,7 +262,7 @@ function cats(){
             const btnOn = h('button', 'btn btn-sm btn-outline-success ms-2 p-0 px-1 border-0', null, [ic('check-circle')]);
             btnOn.title = 'Reactivar (volverá a estar disponible)';
             btnOn.onclick = () => seguro(async () => {
-              if (!await confirmar(`¿Reactivar "${c.name}"? Volverá a estar disponible para pedidos y cocina.`)) return;
+              if (!await confirmar(`¿Reactivar "${c.name}"? Volverá a estar disponible para pedidos y tamales.`)) return;
               const { error } = await sb.from('categories').update({ active: true }).eq('id', c.id);
               if (error) throw error;
               toast('Categoría reactivada');
